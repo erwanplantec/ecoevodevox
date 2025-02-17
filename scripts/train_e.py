@@ -55,23 +55,22 @@ policy = Model_E(n_types, N_MORPHOGENS, 8, 32, alpha=1., beta=0.2, dt=0.1, dvpt_
 policy = make_single_type(policy, 8)
 
 # ---
-net = policy.initialize(random_key())
-fig, ax = plt.subplots(1, 2, figsize=(10,5))
-obs = jnn.one_hot(0, obs_dims)
-I = policy.encode(net, obs)
-render_network(net, node_colors=plt.cm.rainbow(I), ax=ax[0])
-ax[0].scatter(*input_embeddings.T, marker="*", s=300)
-ax[0].scatter(*output_embeddings.T, marker="^", s=300)
-action, net = policy(obs, net, random_key())
-amin, amax = net.a.min(), net.a.max()
-render_network(net, node_colors=plt.cm.rainbow((net.a-amin) / (amax-amin)), ax=ax[1])
-plt.show()
+# net = policy.initialize(random_key())
+# fig, ax = plt.subplots(1, 2, figsize=(10,5))
+# obs = jnn.one_hot(0, obs_dims)
+# I = policy.encode(net, obs)
+# render_network(net, node_colors=plt.cm.rainbow(I), ax=ax[0])
+# ax[0].scatter(*input_embeddings.T, marker="*", s=300)
+# ax[0].scatter(*output_embeddings.T, marker="^", s=300)
+# action, net = policy(obs, net, random_key())
+# amin, amax = net.a.min(), net.a.max()
+# render_network(net, node_colors=plt.cm.rainbow((net.a-amin) / (amax-amin)), ax=ax[1])
+# plt.show()
 # ---
 
 prms, sttcs = eqx.partition(policy, eqx.is_array)
 prms = eqx.tree_at(lambda tree: tree.O, prms, jnp.zeros_like(prms.O))
 init_prms = prms
-prms_shaper = ex.ParameterReshaper(init_prms, verbose=False)
 fctry = lambda prms: eqx.combine(prms, sttcs)
 params_shaper = ex.ParameterReshaper(prms, verbose=False)
 
@@ -99,22 +98,22 @@ tsk = rx.GymnaxTask(env, fctry)
 mutation_mask = jax.tree.map(lambda x: jnp.ones_like(x), init_prms)
 mutation_mask = eqx.tree_at(lambda t: t.types.active, mutation_mask, jnp.zeros_like(init_prms.types.active))
 mutation_mask = eqx.tree_at(lambda t: t.types.id_, mutation_mask, jnp.zeros_like(init_prms.types.id_))
-mutation_mask = prms_shaper.flatten_single(mutation_mask)
+mutation_mask = params_shaper.flatten_single(mutation_mask)
 clip_min = jax.tree.map(lambda x: jnp.full_like(x, -jnp.inf), init_prms)
 clip_min = eqx.tree_at(lambda tree: tree.types.pi, clip_min, jnp.zeros_like(init_prms.types.pi))
-clip_min = prms_shaper.flatten_single(clip_min)
+clip_min = params_shaper.flatten_single(clip_min)
 clip_max = jax.tree.map(lambda x: jnp.full_like(x, jnp.inf), init_prms)
-clip_max = prms_shaper.flatten_single(clip_max)
+clip_max = params_shaper.flatten_single(clip_max)
 p_duplicate = 0.1
-mutation_fn = lambda x, k, s: mutate(x, k, p_duplicate, s.sigma, mutation_mask, prms_shaper, clip_min, clip_max, n_types)
+mutation_fn = lambda x, k, s: mutate(x, k, p_duplicate, s.sigma, mutation_mask, params_shaper, clip_min, clip_max, n_types)
 
-ga = GA(mutation_fn, prms, 128, elite_ratio=0.5, sigma_init=0.05, sigma_decay=0.98, sigma_limit=0.01, p_duplicate=0.01)
+ga = GA(mutation_fn, prms, 8, elite_ratio=0.5, sigma_init=0.05, sigma_decay=0.98, sigma_limit=0.01, p_duplicate=0.01)
+
 logger = rx.Logger(True, metrics_fn)
-trainer = rx.EvosaxTrainer(128, ga, tsk, params_like=prms, eval_reps=1, logger=logger)
+trainer = rx.EvosaxTrainer(16, ga, tsk, params_like=prms, eval_reps=1, logger=logger)
 
 wandb.init(project="evodevox", config=dict())
-s = trainer.init_and_train_(random_key())
-
+s = jax.block_until_ready(trainer.init_and_train_(random_key()))
 x = s.archive[0]
 prms = trainer.params_shaper.reshape_single(x)
 policy = fctry(prms)
