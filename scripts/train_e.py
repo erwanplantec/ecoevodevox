@@ -46,6 +46,7 @@ class Config(NamedTuple):
     log: bool=True
     p_duplicate: float=0.1
     sigma: float=0.1
+    N0: int=8
 
 
 
@@ -63,7 +64,7 @@ def train(cfg: Config):
     n_types = 8
     policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
     policy = Model_E(n_types, N_MORPHOGENS, 8, 32, alpha=1., beta=0.2, dt=0.1, dvpt_time=10., policy_cfg=policy_cfg, key=random_key())
-    policy = make_single_type(policy, 4)
+    policy = make_single_type(policy, cfg.N0)
 
     # ---
     # net = policy.initialize(random_key())
