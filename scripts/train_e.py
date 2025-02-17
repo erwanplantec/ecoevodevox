@@ -115,13 +115,12 @@ def train(cfg: Config):
     clip_min = params_shaper.flatten_single(clip_min)
     clip_max = jax.tree.map(lambda x: jnp.full_like(x, jnp.inf), init_prms)
     clip_max = params_shaper.flatten_single(clip_max)
-    p_duplicate = 0.1
-    mutation_fn = lambda x, k, s: mutate(x, k, p_duplicate, s.sigma, mutation_mask, params_shaper, clip_min, clip_max, n_types)
+    mutation_fn = lambda x, k, s: mutate(x, k, cfg.p_duplicate, s.sigma, mutation_mask, params_shaper, clip_min, clip_max, n_types)
 
     ga = GA(mutation_fn, prms, cfg.pop, elite_ratio=0.5, sigma_init=cfg.sigma, sigma_decay=1., sigma_limit=0.01, p_duplicate=cfg.p_duplicate)
 
     logger = rx.Logger(True, metrics_fn)
-    trainer = rx.EvosaxTrainer(16, ga, tsk, params_like=prms, eval_reps=1, logger=logger)
+    trainer = rx.EvosaxTrainer(cfg.gens, ga, tsk, params_like=prms, eval_reps=cfg.eval_reps, logger=logger)
 
     wandb.init(project="evodevox", config=dict())
     s = jax.block_until_ready(trainer.init_and_train_(random_key()))
