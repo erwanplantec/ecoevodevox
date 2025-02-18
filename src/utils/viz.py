@@ -20,11 +20,11 @@ def render_network(network, ax=None, node_colors=None):
     circ = plt.Circle([0,0], 1, edgecolor=(1,1,1,0.7), facecolor=(0,)*4, linewidth=4)
     ax.add_patch(circ)
     for i in range(x.shape[0]):
-        if not mask[i]: break
+        if not mask[i]: continue
         for j in range(x.shape[0]):
-            if not mask[j]: break
+            if not mask[j]: continue
             xi, yi = x[i]
             xj, yj = x[j]
             w = W_norm[i,j]
-            alpha = max((float(w)*0.5, 0))
+            alpha = min(max(float(w)*0.5, 0), 1.)
             ax.plot([xi,xj], [yi,yj], color=plt.cm.coolwarm(float(w)), alpha=alpha)
