@@ -41,10 +41,12 @@ def safe_norm(x):
 
 def repulsion(x, xs, gamma, mask):
     dx = x[None] - xs #N,2
-    d = jnp.linalg.norm(dx, axis=-1, keepdims=True) #N,1
-    rep = 1 - jnn.sigmoid((d - gamma)*30.) #N,1
-    dx_norm = dx / (jnp.linalg.norm(dx, axis=-1, keepdims=True)+1e-8)
-    force = jnp.sum((dx_norm* rep) * mask[:,None], axis=0)
+    d = jnp.linalg.norm(dx, axis=-1) #N,
+    d, ids = jax.lax.approx_min_k(jnp.where(mask, jnp.inf, d), 5) #type:ignore 5,
+    rep = 1 - jnn.sigmoid((d - gamma)*30.) #5,
+    dx = dx[ids] # 5, 2
+    dx_norm = dx / (d[:,None]+1e-8)
+    force = jnp.sum((dx_norm * rep[:,None]) * mask[ids,None], axis=0)
     return force
 
 @jax.jit
@@ -152,7 +154,7 @@ class Model_E(CTRNNPolicy):
         # 3. Connect
         M = jax.vmap(morphogen_field)(x)
         g = jax.vmap(self.A)(jnp.concatenate([node_types.omega,M], axis=-1))
-        W = jnp.matmul(jnp.matmul(g, self.O), g.T)
+        W = g @ self.O @ g.T
         W = W * (node_types.active[:,None] * node_types.active[None])
         network = CTRNN(
             a=jnp.zeros(x.shape[0]), 

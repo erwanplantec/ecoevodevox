@@ -44,16 +44,17 @@ def make_activations_to_action_fn(action_embeddings, decay_rate=5., is_discrete=
 
 class Config(NamedTuple):
     env: str="CartPole-v1"
-    gens: int=128
-    pop: int=256
+    gens: int=16
+    pop: int=64
     eval_reps: int=1
     log: bool=True
     p_duplicate: float=0.05
     sigma: float=0.01
-    N0: int=8
+    N0: int=64
     max_types: int=8
     max_N: int=256
     synaptic_markers: int=8
+    diagonal_sigma: bool=True
 
 
 def train(cfg: Config):
@@ -69,7 +70,7 @@ def train(cfg: Config):
 
     policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
     policy = Model_EG(cfg.N0, cfg.max_N, cfg.max_types, synaptic_markers=cfg.synaptic_markers, 
-        policy_config=policy_cfg, key=random_key())
+        policy_config=policy_cfg, sigma_is_diagonal=cfg.diagonal_sigma, key=random_key())
 
     # ---
     # net = policy.initialize(random_key())
@@ -87,7 +88,6 @@ def train(cfg: Config):
 
     prms, sttcs = eqx.partition(policy, eqx.is_array)
     prms = eqx.tree_at(lambda tree: tree.O, prms, jnp.zeros_like(prms.O))
-    init_prms = prms
     fctry = lambda prms: eqx.combine(prms, sttcs)
     params_shaper = ex.ParameterReshaper(prms, verbose=False)
 

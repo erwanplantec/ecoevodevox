@@ -134,3 +134,7 @@ def train(cfg: Config):
     render_network(net, ax=ax)
     wandb.log({"best network": wandb.Image(fig)})
     wandb.finish()
+
+if __name__ == '__main__':
+    cfg = Config(pop=64, gens=16, p_duplicate=0.01, sigma=0.05, N0=8)
+    train(cfg)

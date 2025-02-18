@@ -23,8 +23,9 @@ class GaussianType(eqx.Module):
     # ---
 
 def sample_type(typ: GaussianType, key):
+    #return typ.mu
     if typ.sigma.ndim==1:
-        return jr.normal(key, typ.mu.shape) * typ.sigma[:,None] + typ.mu
+        return jr.normal(key, typ.mu.shape) * typ.sigma + typ.mu
     else:
         return jr.multivariate_normal(key, typ.mu, typ.sigma, method="svd")
 
@@ -188,7 +189,7 @@ class Model_EG(CTRNNPolicy):
         neuron_prms = jax.vmap(sample_type)(neuron_prms_gaussian, jr.split(k_sample_prms, self.N_max)) 
         neuron_prms = jax.vmap(self._clip_prms)(neuron_prms)
         neuron_prms = jax.vmap(self._prms_shaper)(neuron_prms)
-        active_neurons= jnp.where(neuron_types_ids==-1, 0., 1.)
+        active_neurons = jnp.where(neuron_types_ids==-1, 0., 1.)
 
         # --- 2. Migrate ---
         x = jr.normal(k_sample_x, (self.N_max, 2)) * 0.01
@@ -234,14 +235,6 @@ def mutate(key: jax.Array, prms: jax.Array, sigma: float, p_duplicate: float, sh
         mdl = eqx.tree_at(lambda t: t.types, mdl, mdl_types)
         return shaper.flatten_single(mdl)
     # ---
-    k1, k2, k3 = jr.split(key, 3)
-    prms = jax.lax.cond(
-        jr.uniform(k1) < p_duplicate,
-        _duplicate,
-        lambda prms, key: prms,
-        prms, k2
-    )
-    # ---
     neuron_prms_min, _ = jax.flatten_util.ravel_pytree(min_neuron_prms(n_types, n_morphogens, synaptic_markers)) #type:ignore
     neuron_prms_max, _ = jax.flatten_util.ravel_pytree(max_neuron_prms(n_types, n_morphogens, synaptic_markers)) #type:ignore
     
@@ -272,9 +265,14 @@ def mutate(key: jax.Array, prms: jax.Array, sigma: float, p_duplicate: float, sh
     prms_min, _ = jax.flatten_util.ravel_pytree(prms_min) #type:ignore
 
     # ---
-    epsilon = jr.normal(k3, prms.shape) * sigma * mask
-    prms = prms + epsilon
-    prms = jnp.clip(prms, prms_min, prms_max)
+
+    k1, k2 = jr.split(key)
+    prms = jax.lax.cond(
+        jr.uniform(k1) < p_duplicate,
+        _duplicate,
+        lambda prms, key: jnp.clip(prms + jr.normal(k2, prms.shape) * sigma * mask, prms_min, prms_max),
+        prms, k2
+    )
 
     return prms
 
@@ -283,7 +281,7 @@ if __name__ == '__main__':
     plt.style.use("../ntbks/drk_fte.mplstyle")
     key = jr.key(random.randint(0, 1000))
     fig, ax = plt.subplots(2,5, figsize=(20,8), sharey="row")
-    model = Model_EG(N=8, N_max=32, max_types=8, key=key, sigma_is_diagonal=False,)
+    model = Model_EG(N=8, N_max=32, max_types=8, key=key, sigma_is_diagonal=True)
     ctrnn = model.initialize(key)
     wmax = jnp.abs(ctrnn.W.max())
     render_network(ctrnn, ax=ax[0,0])
@@ -296,11 +294,7 @@ if __name__ == '__main__':
         prms_flat = shaper.flatten_single(prms)
         prms = mutate(_key, prms_flat, sigma=0.1, p_duplicate=0.5, shaper=ex.ParameterReshaper(prms, verbose=False), n_types=8, synaptic_markers=8, n_morphogens=7)
         model = eqx.combine(shaper.reshape_single(prms), _)
-        print(model.types.active)
-        print(ctrnn.id_)
         pi = model.types.pi *model.types.active
-        print(pi / pi.sum())
-        print("# ---")
         ctrnn = model.initialize(_key)
         render_network(ctrnn, ax=ax[0, i+1])
         wmax = jnp.abs(ctrnn.W.max())
