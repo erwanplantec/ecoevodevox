@@ -120,7 +120,7 @@ class Model_LG(CTRNNPolicy):
         self.N_max = N_max
 
         self.types = NeuronType(
-            pi = jnp.zeros(max_types),
+            pi = jnp.zeros(max_types).at[0].set(1.),
             z = jnp.zeros((max_types, latent_dims)),
             active = jnp.zeros(max_types).at[0].set(1.)
         )
@@ -157,6 +157,7 @@ class Model_LG(CTRNNPolicy):
         pi = self.types.pi * self.types.active
         pi = (pi / jnp.sum(pi)) * p_active
         pi = jnp.concatenate([pi, jnp.array([1-p_active])])
+        print(pi)
 
         neuron_types_ids = jr.choice(k_sample_types, jnp.arange(n_types+1).at[-1].set(-1), (self.N_max,), p=pi)
         neuron_types = jax.tree.map(lambda x: x[neuron_types_ids], self.types)
@@ -280,6 +281,7 @@ if __name__ == '__main__':
         model = eqx.combine(shaper.reshape_single(prms), _)
         pi = model.types.pi * model.types.active
         ctrnn = model.initialize(_key)
+        print(ctrnn.mask.sum())
         render_network(ctrnn, ax=ax[0, i+1])
         wmax = jnp.abs(ctrnn.W.max())
         sc = ax[1,i+1].imshow(ctrnn.W, cmap="coolwarm", vmin=-wmax, vmax=wmax)

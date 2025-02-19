@@ -84,9 +84,9 @@ class Model_E(CTRNNPolicy):
     N: jax.Array
     O: jax.Array
     A: nn.MLP
-    alpha: jax.Array
-    beta: jax.Array
     # --- statics ---
+    alpha: float
+    beta: float
     n_types: int
     max_nodes: int
     dt: float
@@ -94,7 +94,7 @@ class Model_E(CTRNNPolicy):
     temperature_decay: float
     # ---
     def __init__(self, n_types: int, n_morphogens: int, n_synaptic_markers: int, max_nodes_per_type: int=32, 
-                 alpha: float=1., beta: float=0.5, dt: float=0.1, dvpt_time: float=10., temperature_decay: float=1., 
+                 alpha: float=1., beta: float=1., dt: float=0.1, dvpt_time: float=10., temperature_decay: float=1., 
                  policy_cfg: CTRNNPolicyConfig=dummy_policy_config, *, key: jax.Array):
 
         super().__init__(policy_cfg)
@@ -123,8 +123,8 @@ class Model_E(CTRNNPolicy):
         
         self.n_types = n_types
         self.max_nodes = max_nodes_per_type * n_types
-        self.alpha = jnp.ones(())*alpha
-        self.beta = jnp.ones(())*beta
+        self.alpha = alpha
+        self.beta = beta
         self.dt = dt
         self.dvpt_time = dvpt_time
         self.temperature_decay = temperature_decay
