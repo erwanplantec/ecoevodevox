@@ -45,6 +45,9 @@ class NeuronParams(NamedTuple):
     m: Float
     s: Float
 
+ZERO = jnp.zeros(())
+ONE = jnp.ones(())
+
 min_neuron_prms = lambda n_types, n_morphogens, synaptic_markers: NeuronParams(psi=jnp.full(n_morphogens, -jnp.inf), 
                                                                                gamma=ZERO,
                                                                                theta=ZERO,
@@ -106,8 +109,6 @@ sensorimotor_neuron = lambda n_types, n_morphogens, synaptic_markers : NeuronPar
                                                                                     m=1.,
                                                                                     s=1.)
 
-ZERO = jnp.zeros(())
-ONE = jnp.ones(())
 
 dummy_policy_config = CTRNNPolicyConfig(lambda x:x, lambda x: x)
     

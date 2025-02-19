@@ -1,3 +1,4 @@
+from ..utils.viz import render_network
 from .policy import CTRNN, CTRNNPolicy, CTRNNPolicyConfig
 
 import jax
@@ -39,11 +40,11 @@ N_MORPHOGENS = 7
 def safe_norm(x):
     return x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + 1e-8)
 
-def repulsion(x, xs, gamma, mask):
+def repulsion(x, xs, gamma, mask, k=5):
     dx = x[None] - xs #N,2
     d = jnp.linalg.norm(dx, axis=-1) #N,
-    d, ids = jax.lax.approx_min_k(jnp.where(mask, jnp.inf, d), 5) #type:ignore 5,
-    rep = 1 - jnn.sigmoid((d - gamma)*30.) #5,
+    d, ids = jax.lax.approx_min_k(jnp.where(mask, d, jnp.inf), k) #type:ignore
+    rep = jnn.sigmoid((gamma-d)*30.) #5,
     dx = dx[ids] # 5, 2
     dx_norm = dx / (d[:,None]+1e-8)
     force = jnp.sum((dx_norm * rep[:,None]) * mask[ids,None], axis=0)
@@ -279,4 +280,13 @@ def mutate(prms: jax.Array, key: jax.Array, p_duplicate: float, sigma_mut: float
     )
     
     return prms, duplicated
+
+
+if __name__ == '__main__':
+	import matplotlib.pyplot as plt
+	model = Model_E(4, N_MORPHOGENS, 8, key=jr.key(1), beta=1.0, alpha=1.0)
+	model = make_two_types(model, 8, 2)
+	ctrnn = model.initialize(jr.key(2))
+	render_network(ctrnn)
+	plt.show()
     
