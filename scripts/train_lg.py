@@ -54,6 +54,9 @@ class Config(NamedTuple):
     max_N: int=256
     synaptic_markers: int=8
     latent_dims: int=16
+    elite_ratio: float=0.2
+    width: int=32
+    depth: int=1
 
 
 def train(cfg: Config):
@@ -68,7 +71,7 @@ def train(cfg: Config):
     decode_fn = make_activations_to_action_fn(output_embeddings, is_discrete=is_discrete)
 
     policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
-    decoder_kws = dict(width=64, depth=1)
+    decoder_kws = dict(width=cfg.width, depth=cfg.depth)
     policy = Model_LG(cfg.latent_dims, cfg.N0, cfg.max_N, cfg.max_types, synaptic_markers=cfg.synaptic_markers, 
         policy_config=policy_cfg, key=random_key(), decoder_kwargs=decoder_kws)
 
@@ -126,7 +129,7 @@ def train(cfg: Config):
         None
     )
 
-    ga = GA(mutation_fn, prms, cfg.pop, elite_ratio=0.5, sigma_init=cfg.sigma, sigma_decay=1., sigma_limit=0.01, p_duplicate=cfg.p_duplicate)
+    ga = GA(mutation_fn, prms, cfg.pop, elite_ratio=cfg.elite_ratio, sigma_init=cfg.sigma, sigma_decay=1., sigma_limit=0.01, p_duplicate=cfg.p_duplicate)
 
     logger = rx.Logger(cfg.log, metrics_fn)
     trainer = rx.EvosaxTrainer(cfg.gens, ga, tsk, params_like=prms, eval_reps=cfg.eval_reps, logger=logger)
