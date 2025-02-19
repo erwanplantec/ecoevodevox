@@ -1,6 +1,5 @@
 from functools import partial
 from src.devo.policy import CTRNNPolicyConfig
-from src.devo.model_e import N_MORPHOGENS
 from src.devo.model_lg import Model_LG, mutate
 from src.utils.viz import render_network
 from src.evo.ga import GA
@@ -50,7 +49,7 @@ class Config(NamedTuple):
     log: bool=True
     p_duplicate: float=0.05
     sigma: float=0.01
-    N0: int=64
+    N0: int=8
     max_types: int=8
     max_N: int=256
     synaptic_markers: int=8
@@ -69,8 +68,9 @@ def train(cfg: Config):
     decode_fn = make_activations_to_action_fn(output_embeddings, is_discrete=is_discrete)
 
     policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
+    decoder_kws = dict(width=64, depth=1)
     policy = Model_LG(cfg.latent_dims, cfg.N0, cfg.max_N, cfg.max_types, synaptic_markers=cfg.synaptic_markers, 
-        policy_config=policy_cfg, key=random_key())
+        policy_config=policy_cfg, key=random_key(), decoder_kwargs=decoder_kws)
 
     # ---
     # net = policy.initialize(random_key())
@@ -114,7 +114,8 @@ def train(cfg: Config):
 
     mut_msk = jax.tree.map(lambda x: jnp.ones_like(x), prms)
     mut_msk = eqx.tree_at(lambda tree: tree.types.active, mut_msk, jnp.zeros_like(prms.types.active))
-    mut_msk = params_shaper.flatten_single(prms)
+    mut_msk = params_shaper.flatten_single(mut_msk)
+
     lower_bound, upper_bound = policy.prms_lower_bound(), policy.prms_upper_bound()
     lower_bound = params_shaper.flatten_single(lower_bound)
     upper_bound = params_shaper.flatten_single(upper_bound)
@@ -144,5 +145,5 @@ def train(cfg: Config):
         wandb.finish()
 
 if __name__ == '__main__':
-    cfg = Config(pop=32)
-    train(cfg)
+    cfg = Config(pop=8, gens=8)
+    with jax.debug_nans(): train(cfg)

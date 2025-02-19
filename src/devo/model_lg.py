@@ -1,4 +1,3 @@
-import matplotlib
 from .policy import CTRNNPolicy, CTRNNPolicyConfig, CTRNN
 from .model_e import migration_step, morphogen_field, N_MORPHOGENS
 
@@ -74,7 +73,7 @@ max_neuron_prms = lambda n_types, n_morphogens, synaptic_markers: NeuronParams(p
                                                                                s=ONE)
 
 sensorimotor_neuron = lambda n_types, n_morphogens, synaptic_markers : NeuronParams(psi=jnp.zeros(n_morphogens), 
-                                                                                    gamma=0.5,
+                                                                                    gamma=0.9,
                                                                                     theta=0.,
                                                                                     alpha=1.,
                                                                                     beta=0.2,
@@ -109,7 +108,8 @@ class Model_LG(CTRNNPolicy):
     # ---
     def __init__(self, latent_dims=16, N=8, N_max=256, max_types=16, N_gain=10.0, synaptic_markers=8, n_morphogens=N_MORPHOGENS, 
                  migration_T=10.0, migration_dt=0.05, migration_temperature_decay=1., 
-                 alpha=1., beta=0.5, policy_config: CTRNNPolicyConfig=dummy_policy_config, *, key):
+                 alpha=1., beta=1., policy_config: CTRNNPolicyConfig=dummy_policy_config, 
+                 decoder_kwargs=dict(), *, key):
         
         super().__init__(policy_config)
 
@@ -130,7 +130,8 @@ class Model_LG(CTRNNPolicy):
         flat_min_neuron_prms, shaper = jax.flatten_util.ravel_pytree(_min_neuron_prms) #type:ignore
         flat_max_neuron_prms, shaper = jax.flatten_util.ravel_pytree(_max_neuron_prms) #type:ignore
         self._neuron_prms_shaper = shaper
-        self.type_decoder = Decoder(latent_dims, len(flat_min_neuron_prms), key=key_dec)
+        
+        self.type_decoder = Decoder(latent_dims, len(flat_min_neuron_prms), key=key_dec, **decoder_kwargs)
         self._clip_neuron_prms = lambda prms: jnp.clip(prms, flat_min_neuron_prms, flat_max_neuron_prms)
         self.alpha = alpha
         self.beta = beta
@@ -154,10 +155,9 @@ class Model_LG(CTRNNPolicy):
         # --- 1. Sample Neurons ---
         N = jnp.clip(self.N * self.N_gain, 0., self.N_max)
         p_active = N  / self.N_max
-        pi = self.types.pi * self.types.active
+        pi = jnp.clip(self.types.pi, 0.01, jnp.inf) * self.types.active
         pi = (pi / jnp.sum(pi)) * p_active
         pi = jnp.concatenate([pi, jnp.array([1-p_active])])
-        print(pi)
 
         neuron_types_ids = jr.choice(k_sample_types, jnp.arange(n_types+1).at[-1].set(-1), (self.N_max,), p=pi)
         neuron_types = jax.tree.map(lambda x: x[neuron_types_ids], self.types)
@@ -257,13 +257,20 @@ if __name__ == '__main__':
 
     plt.style.use("../ntbks/drk_fte.mplstyle")
     key = jr.key(random.randint(0, 1000))
-    fig, ax = plt.subplots(2,5, figsize=(20,8), sharey="row")
-    model = Model_LG(N=8, N_max=32, max_types=8, key=key, beta=1., alpha=1.)
+    fig, ax = plt.subplots(2,5, figsize=(20,8))
+    model = Model_LG(N=16, N_max=256, max_types=8, key=key, beta=1., alpha=1.)
+    model = eqx.tree_at(
+        lambda tree: tree.type_decoder.mlp.layers[-1].weight,
+        model,
+        jnp.zeros_like(model.type_decoder.mlp.layers[-1].weight)
+    )
     prms, _ = model.partition()
+    
     shaper = ex.ParameterReshaper(prms, verbose=True)
     mut_msk = jax.tree.map(lambda x: jnp.ones_like(x), prms)
     mut_msk = eqx.tree_at(lambda tree: tree.types.active, mut_msk, jnp.zeros_like(prms.types.active))
-    mut_msk = shaper.flatten_single(prms)
+    mut_msk = shaper.flatten_single(mut_msk)
+    
     lower_bound, upper_bound = model.prms_lower_bound(), model.prms_upper_bound()
     lower_bound = shaper.flatten_single(lower_bound)
     upper_bound = shaper.flatten_single(upper_bound)
@@ -272,22 +279,30 @@ if __name__ == '__main__':
     ctrnn = model.initialize(key)
     wmax = jnp.abs(ctrnn.W.max())
     render_network(ctrnn, ax=ax[0,0])
-    sc = ax[1,0].imshow(ctrnn.W, cmap="coolwarm", vmin=-wmax, vmax=wmax)
+    msk = ctrnn.mask.astype(bool)
+    W = ctrnn.W[msk][:,msk]
+    wmax = jnp.abs(W.max())
+    sc = ax[1,0].imshow(W, cmap="coolwarm", vmin=-wmax, vmax=wmax)
     plt.colorbar(sc)
+    
     for i in range(4):
         key, _key = jr.split(key)
+        
         prms = shaper.flatten_single(prms)
-        prms = mutate(prms, _key, 0.1, 0.1, shaper, mut_msk, clip_fn)
+        prms = mutate(prms, _key, 0.5, 0.1, shaper, mut_msk, clip_fn)
         model = eqx.combine(shaper.reshape_single(prms), _)
+        mut = shaper.reshape_single(mut)
+        
         pi = model.types.pi * model.types.active
         ctrnn = model.initialize(_key)
-        print(ctrnn.mask.sum())
         render_network(ctrnn, ax=ax[0, i+1])
-        wmax = jnp.abs(ctrnn.W.max())
-        sc = ax[1,i+1].imshow(ctrnn.W, cmap="coolwarm", vmin=-wmax, vmax=wmax)
+        msk = ctrnn.mask.astype(bool)
+        W = ctrnn.W[msk][:,msk]
+        wmax = jnp.abs(W.max())
+        sc = ax[1,i+1].imshow(W, cmap="coolwarm", vmin=-wmax, vmax=wmax)
         plt.colorbar(sc)
     fig.tight_layout()
-    plt.show()
+    #plt.show()
 
 
 
