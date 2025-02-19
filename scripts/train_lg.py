@@ -49,6 +49,8 @@ class Config(NamedTuple):
     log: bool=True
     p_duplicate: float=0.05
     sigma: float=0.01
+    sigma_decay: float=1.0
+    sigma_limit: float=0.01
     N0: int=8
     max_types: int=8
     max_N: int=256
@@ -129,7 +131,7 @@ def train(cfg: Config):
         None
     )
 
-    ga = GA(mutation_fn, prms, cfg.pop, elite_ratio=cfg.elite_ratio, sigma_init=cfg.sigma, sigma_decay=1., sigma_limit=0.01, p_duplicate=cfg.p_duplicate)
+    ga = GA(mutation_fn, prms, cfg.pop, elite_ratio=cfg.elite_ratio, sigma_init=cfg.sigma, sigma_decay=cfg.sigma_decay, sigma_limit=cfg.sigma_limit, p_duplicate=cfg.p_duplicate)
 
     logger = rx.Logger(cfg.log, metrics_fn)
     trainer = rx.EvosaxTrainer(cfg.gens, ga, tsk, params_like=prms, eval_reps=cfg.eval_reps, logger=logger)

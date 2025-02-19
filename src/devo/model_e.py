@@ -135,7 +135,7 @@ class Model_E(CTRNNPolicy):
         x0 = jr.normal(key, (self.max_nodes, 2)) * 0.01
         node_type_ids = jnp.zeros(self.max_nodes)
         n_tot = 0
-        pi = self.types.pi / jnp.sum(self.types.pi * self.types.active)
+        pi = (self.types.pi*self.types.active) / jnp.sum(self.types.pi * self.types.active)
         n = jnp.round(self.N * 10.0 * pi)
         for _, (n, msk) in enumerate(zip(n, self.types.active)):
             node_type_ids = jnp.where(jnp.arange(self.max_nodes)<n_tot+n*msk, node_type_ids+1, node_type_ids)
