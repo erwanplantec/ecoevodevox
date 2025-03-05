@@ -1,5 +1,5 @@
 from ..utils.viz import render_network
-from .policy import CTRNN, CTRNNPolicy, CTRNNPolicyConfig
+from .ctrnn import CTRNN, CTRNNPolicy, CTRNNPolicyConfig
 
 import jax
 import jax.numpy as jnp

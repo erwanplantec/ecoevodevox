@@ -1,7 +1,7 @@
 
 from ..utils.viz import render_network, plt
 from .model_e import morphogen_field, N_MORPHOGENS, migration_step
-from .policy import CTRNN, CTRNNPolicy, CTRNNPolicyConfig
+from .ctrnn import CTRNN, CTRNNPolicy, CTRNNPolicyConfig
 
 import jax
 import jax.numpy as jnp
