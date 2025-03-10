@@ -11,9 +11,9 @@ class CTRNN(NamedTuple):
     gain: jax.Array
     bias: jax.Array
     W: jax.Array
-    mask: jax.Array
-    m: jax.Array
-    s: jax.Array
+    mask: jax.Array|None=None
+    m: jax.Array|None=None
+    s: jax.Array|None=None
     id_: jax.Array|None=None
 
 @eqx.filter_jit

@@ -8,17 +8,18 @@ import equinox as eqx
 import matplotlib.pyplot as plt
 from celluloid import Camera
 
-from src.eco.env import GridWorld, FoodType
+from src.eco.gridworld import GridWorld, FoodType
 from src.devo.baselines.mlp import MLPPolicy
 from src.devo.utils import make_apply_init
 from src.evo.mutation import mutate_flat_generalized
 
 
 # --- Env ---
-env_size = (128,128)
+env_size = (256,256)
 max_agents = 10_000
 apply_mb = None
 birth_pool_size = max_agents
+init_agents = 2_000
 
 # --- Food ---
 food_types = FoodType(
@@ -26,6 +27,7 @@ food_types = FoodType(
 	diffusion_rate=jnp.array([1.0]),
 	energy_concentration=jnp.array([1.0])
 )
+initial_food_density = 0.05
 
 # --- Agents ---
 mlp_depth = 1
@@ -37,13 +39,13 @@ agent_fctry = lambda key: ravel_pytree(eqx.filter(MLPPolicy(29, width=mlp_width,
 
 # --- Evolution ---
 sigma_mut = 0.03
-p_mut = 0.01
+p_mut = 0.1
 mutation_fn = partial(mutate_flat_generalized, sigma=sigma_mut, p=p_mut)
 
 # --- Instantiate ---
 
 env = GridWorld(agent_fctry, agent_init, agent_apply, food_types, env_size, mutation_fn, #type:ignore
-	max_agents=max_agents, init_agents=200, max_age=200, reproduction_energy_cost=2, initial_food_density=0.01, 
+	max_agents=max_agents, init_agents=init_agents, max_age=200, reproduction_energy_cost=0.5, initial_food_density=initial_food_density, 
 	time_above_threshold_to_reproduce=50, time_below_threshold_to_die=30,
 	base_energy_loss=0.1) 
 
@@ -56,7 +58,7 @@ def step_fn(state, key):
 
 state = env.reset(jr.key(1))
 
-state, data = jax.lax.scan(step_fn, state, jr.split(jr.key(2), 1024))
+state, data = jax.lax.scan(step_fn, state, jr.split(jr.key(2), 256))
 
 states = data["state"]
 
@@ -65,7 +67,7 @@ T = states.time.shape[0]
 
 fig, ax = plt.subplots(4, 1, figsize=(16,16), height_ratios=[15,3,3,3])
 
-cam = Camera(fig)
+cam = Camera(fig) #type:ignore
 for t in range(T):
 	state = jax.tree.map(lambda x: x[t], states)
 	env.render(state, ax[0])

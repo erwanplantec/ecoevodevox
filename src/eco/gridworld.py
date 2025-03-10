@@ -100,6 +100,7 @@ class GridWorld:
 		reproduction_energy_cost: float=0.5,
 		move_energy_cost: float=0.1,
 		base_energy_loss: float=0.1,
+		max_energy: float=3.0,
 		time_above_threshold_to_reproduce: int=20,
 		time_below_threshold_to_die: int=10,
 		initial_agent_energy: float=1.0,
@@ -162,6 +163,7 @@ class GridWorld:
 		self.initial_agent_energy = initial_agent_energy
 		self.reproduction_energy_cost = reproduction_energy_cost
 		self.base_energy_loss = base_energy_loss
+		self.max_energy = max_energy
 		self.agent_scent_diffusion_kernel = jnp.exp(-norms/agent_scent_diffusion**2)
 		self.chemical_detection_threshold = chemical_detection_threshold
 		self.move_energy_cost = move_energy_cost
@@ -229,9 +231,8 @@ class GridWorld:
 		
 		key_repr, key_mut, key_init = jr.split(key, 3)
 		agents = state.agents
-		agents_energy = agents.energy
-		below_threshold = agents_energy < 0.
-		above_threshold = agents_energy > self.energy_reproduction_threshold
+		below_threshold = agents.energy < 0.
+		above_threshold = agents.energy > self.energy_reproduction_threshold
 		
 		agents_tat = (agents.time_above_threshold + above_threshold) * above_threshold
 		agents_tbt = (agents.time_below_threshold + below_threshold) * below_threshold
@@ -240,81 +241,95 @@ class GridWorld:
 
 		dead = (agents_tbt > self.time_below_threshold_to_die) | (agents.age > self.max_age)
 		agents_alive = agents.alive & ( ~dead )
+		agents = agents._replace(alive=agents_alive, time_above_threshold=agents_tat, time_below_threshold=agents_tbt)
 
 		# --- 2. Reproduce ---
+
+		# ---
+
+		def _reproduce(reproducing, agents):
+			"""
+			"""
+			free_buffer_spots = ~agents.alive # N,
+			_, parents_buffer_id = jax.lax.top_k(reproducing+jr.uniform(key_repr,reproducing.shape,minval=-0.1,maxval=0.1), self.birth_pool_size)
+			parents_mask = reproducing[parents_buffer_id]
+			parents_prms = agents.prms[parents_buffer_id]
+			is_free, childs_buffer_id = jax.lax.top_k(free_buffer_spots, self.birth_pool_size)
+			childs_mask = parents_mask & is_free #is a child if parent was actually reproducing and there are free buffer spots
+
+			childs_alive = childs_mask
+			childs_prms = jax.vmap(self.mutation_fn)(parents_prms, jr.split(key_mut, self.birth_pool_size))
+			childs_policy_states = self.mapped_agent_init(childs_prms, jr.split(key_init, self.birth_pool_size), childs_mask)
+			childs_energy = jnp.full(self.birth_pool_size, self.initial_agent_energy, dtype=f16)
+			childs_positions = agents.position[parents_buffer_id]
+
+			agents_alive = agents.alive.at[childs_buffer_id].set(
+				jnp.where(childs_mask, childs_alive, agents.alive[childs_buffer_id])
+			) #make sur to not overwrite occupied buffer ids (if more reproducers than free buffer spots)
+			
+			agents_prms = agents.prms.at[childs_buffer_id].set(
+				jnp.where(childs_mask[:,None], childs_prms, agents.prms[childs_buffer_id])
+			)
+			
+			agents_policy_states = jax.tree.map(
+				lambda x, cs, os: x.at[childs_buffer_id].set(
+					jnp.where(jnp.expand_dims(childs_mask, [i+1 for i in range(cs.ndim-1)]), cs, os[childs_buffer_id])
+				), 
+				agents.policy_state, childs_policy_states, agents.policy_state
+			)
+			agents_energy = agents.energy.at[childs_buffer_id].set(
+				jnp.where(childs_mask, childs_energy, agents.energy[childs_buffer_id])
+			)
+			agents_energy = agents_energy.at[parents_buffer_id].add(-self.reproduction_energy_cost * childs_mask)
+			
+			agents_positions = agents.position.at[childs_buffer_id].set(
+				jnp.where(childs_mask[:,None], childs_positions, agents.position[childs_buffer_id])
+			)
+			
+			agents_tat = agents.time_above_threshold
+			agents_tbt = agents.time_below_threshold
+			agents_tat = agents_tat.at[parents_buffer_id].set(jnp.where(childs_mask, 0, agents_tat[parents_buffer_id]))
+			agents_tat = agents_tat.at[childs_buffer_id].set(jnp.where(childs_mask, 0, agents_tat[childs_buffer_id]))
+			
+			agents_tbt = agents_tbt.at[childs_buffer_id].set(jnp.where(childs_mask, 0, agents_tbt[childs_buffer_id]))
+
+			agents_age = agents.age.at[childs_buffer_id].set(jnp.where(childs_mask, 0, agents.age[childs_buffer_id]))
+			agents_age = jnp.where(agents_alive, agents.age+1, 0)
+
+			agents_n_offsprings = agents.n_offsprings.at[childs_buffer_id].set(jnp.where(childs_mask,0,agents.n_offsprings[childs_buffer_id]))
+			agents_n_offsprings = agents_n_offsprings.at[parents_buffer_id].add(1)
+
+			childs_ids = jnp.where(childs_mask, jnp.cumsum(childs_mask, dtype=i64)+state.last_agent_id+1, 0)
+			agents_id = agents.id_.at[childs_buffer_id].set(
+				jnp.where(childs_mask, childs_ids, agents.id_[childs_buffer_id]) #type:ignore
+			)
+
+			childs_parent_id = agents.id_[parents_buffer_id]
+			parent_ids = agents.parent_id_.at[childs_buffer_id].set(
+				jnp.where(childs_mask, childs_parent_id, agents.id_[childs_buffer_id])
+			)
+
+			agents = agents._replace(
+				alive=agents_alive, 
+				prms=agents_prms, 
+				policy_state=agents_policy_states, 
+				energy=agents_energy, 
+				position=agents_positions, 
+				time_above_threshold=agents_tat, 
+				time_below_threshold=agents_tbt, 
+				age=agents_age,
+				n_offsprings=agents_n_offsprings,
+				id_=agents_id,
+				parent_id_=parent_ids
+			)
+			return agents
+		# ---	
+
 		reproducing = (agents_tat > self.time_above_threshold_to_reproduce) # N,
-		free_buffer_spots = ~agents_alive # N,
-		_, parents_buffer_id = jax.lax.top_k(reproducing+jr.uniform(key_repr,reproducing.shape,minval=-0.1,maxval=0.1), self.birth_pool_size)
-		parents_mask = reproducing[parents_buffer_id]
-		parents_prms = agents.prms[parents_buffer_id]
-		is_free, childs_buffer_id = jax.lax.top_k(free_buffer_spots, self.birth_pool_size)
-		childs_mask = parents_mask & is_free #is a child if parent was actually reproducing and there are free buffer spots
 
-		childs_alive = childs_mask
-		childs_prms = jax.vmap(self.mutation_fn)(parents_prms, jr.split(key_mut, self.birth_pool_size))
-		childs_policy_states = self.mapped_agent_init(childs_prms, jr.split(key_init, self.birth_pool_size), childs_mask)
-		childs_energy = jnp.full(self.birth_pool_size, self.initial_agent_energy, dtype=f16)
-		childs_positions = agents.position[parents_buffer_id]
+		agents = jax.lax.cond(jnp.any(reproducing), _reproduce, lambda _, agents: agents, reproducing, agents)
 
-		agents_alive = agents_alive.at[childs_buffer_id].set(
-			jnp.where(childs_mask, childs_alive, agents_alive[childs_buffer_id])
-		) #make sur to not overwrite occupied buffer ids (if more reproducers than free buffer spots)
-		
-		agents_prms = agents.prms.at[childs_buffer_id].set(
-			jnp.where(childs_mask[:,None], childs_prms, agents.prms[childs_buffer_id])
-		)
-		
-		agents_policy_states = jax.tree.map(
-			lambda x, cs, os: x.at[childs_buffer_id].set(
-				jnp.where(jnp.expand_dims(childs_mask, [i+1 for i in range(cs.ndim-1)]), cs, os[childs_buffer_id])
-			), 
-			agents.policy_state, childs_policy_states, agents.policy_state
-		)
-		agents_energy = agents_energy.at[childs_buffer_id].set(
-			jnp.where(childs_mask, childs_energy, agents_energy[childs_buffer_id])
-		)
-		agents_energy = agents_energy.at[parents_buffer_id].add(-self.reproduction_energy_cost * childs_mask)
-		
-		agents_positions = agents.position.at[childs_buffer_id].set(
-			jnp.where(childs_mask[:,None], childs_positions, agents.position[childs_buffer_id])
-		)
-		
-		agents_tat = agents_tat.at[parents_buffer_id].set(jnp.where(childs_mask, 0, agents_tat[parents_buffer_id]))
-		agents_tat = agents_tat.at[childs_buffer_id].set(jnp.where(childs_mask, 0, agents_tat[childs_buffer_id]))
-		
-		agents_tbt = agents_tbt.at[childs_buffer_id].set(jnp.where(childs_mask, 0, agents_tbt[childs_buffer_id]))
-
-		agents_age = agents.age.at[childs_buffer_id].set(jnp.where(childs_mask, 0, agents.age[childs_buffer_id]))
-		agents_age = jnp.where(agents_alive, agents.age+1, 0)
-
-		agents_n_offsprings = agents.n_offsprings.at[childs_buffer_id].set(jnp.where(childs_mask,0,agents.n_offsprings[childs_buffer_id]))
-		agents_n_offsprings = agents_n_offsprings.at[parents_buffer_id].add(1)
-
-		childs_ids = jnp.where(childs_mask, jnp.cumsum(childs_mask, dtype=i64)+state.last_agent_id+1, 0)
-		agents_id = agents.id_.at[childs_buffer_id].set(
-			jnp.where(childs_mask, childs_ids, agents.id_[childs_buffer_id]) #type:ignore
-		)
-
-		childs_parent_id = agents.id_[parents_buffer_id]
-		parent_ids = agents.parent_id_.at[childs_buffer_id].set(
-			jnp.where(childs_mask, childs_parent_id, agents.id_[childs_buffer_id])
-		)
-
-		agents = agents._replace(
-			alive=agents_alive, 
-			prms=agents_prms, 
-			policy_state=agents_policy_states, 
-			energy=agents_energy, 
-			position=agents_positions, 
-			time_above_threshold=agents_tat, 
-			time_below_threshold=agents_tbt, 
-			age=agents_age,
-			n_offsprings=agents_n_offsprings,
-			id_=agents_id,
-			parent_id_=parent_ids
-		)
-
-		new_last_id_ = agents_id.max()
+		new_last_id_ = agents.id_.max()
 
 		return state._replace(agents=agents, last_agent_id=new_last_id_)
 
@@ -370,11 +385,11 @@ class GridWorld:
 		eating_agents_on_cell = (jnp.zeros(self.size, dtype=f16).at[agents_i, agents_j].add(eating_agents))[agents_i,agents_j] #N,
 		energy_on_cell = jnp.sum(food_on_cell * self.food_types.energy_concentration[:,None], axis=0) #N,
 		agents_reward = jnp.where(
-			agents.alive, 
+			eating_agents, 
 			energy_on_cell / jnp.clip(eating_agents_on_cell, 1), 
 			0.0
 		)
-		agents_energy = agents.energy + agents_reward
+		agents_energy = jnp.clip(agents.energy + agents_reward, -jnp.inf, self.max_energy)
 		
 		agents = agents._replace(reward=agents_reward, energy=agents_energy)
 		eating_agents_grid = jnp.zeros(self.size, dtype=bool).at[agents_i, agents_j].set(eating_agents)

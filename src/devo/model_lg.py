@@ -1,4 +1,4 @@
-from .policy import CTRNNPolicy, CTRNNPolicyConfig, CTRNN
+from .ctrnn import CTRNNPolicy, CTRNNPolicyConfig, CTRNN
 from .model_e import migration_step, morphogen_field, N_MORPHOGENS
 
 import jax

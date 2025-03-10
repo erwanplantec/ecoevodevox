@@ -46,6 +46,8 @@ def minivmap(func, minibatch_size, check_func=None, default_output=None, func_ta
 
 
 
+import wandb
+
 class EnvLogWrapper:
 	# ---
 	def __init__(self, env):

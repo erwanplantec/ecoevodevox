@@ -1,5 +1,5 @@
 from functools import partial
-from src.devo.policy import CTRNNPolicyConfig
+from src.devo.ctrnn import CTRNNPolicyConfig
 from src.devo.model_e import N_MORPHOGENS
 from src.devo.model_eg import Model_EG, mutate
 from src.utils.viz import render_network
@@ -96,7 +96,7 @@ def train(cfg: Config):
         policy_states = data["eval_data"]["policy_states"] # P, T, ...
         archive = state.archive
         prms = params_shaper.reshape(archive)
-        log_data["active types"] = prms.types.active.sum(-1)
+        log_data["active types"] = prms.types.active.sum(-1) #type:ignore
         log_data["network sizes"] = policy_states.mask[:,-1].sum(-1)
         # eval
         x = state.archive[0]

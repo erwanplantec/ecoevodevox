@@ -9,7 +9,7 @@ import equinox as eqx
 import equinox.nn as nn
 import evosax as ex
 
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 from jaxtyping import Float, Int
 
 
@@ -19,7 +19,8 @@ class NeuronType(NamedTuple):
     active: Float
     id_: Int
     # -- Migration Parameters ---
-    psi: Float # morphogens affinity
+    psi: Float # molecular affinity
+    zeta: Float # molecular pertubation
     gamma: Float # repulsion distance decay coefficients
     theta: Float
     # --- Connection Parameters ---
@@ -32,48 +33,44 @@ class NeuronType(NamedTuple):
     m: Float # expression of motor characteristics
     # ---
 
-def morphogen_field(x):
-    return jnp.array([x[0], x[1], x[0]*x[1], jnp.abs(x[0]), jnp.abs(x[1]), jnp.linalg.norm(x), (jnp.linalg.norm(x)-0.5)**2])
 
-N_MORPHOGENS = 7
+# ====================== MIGRATION ======================
+
+def migration_field(x):
+    return jnp.array([x[0], x[1], jnp.abs(x[0]), jnp.abs(x[1]), jnp.max(jnp.abs(x))])
+
+N_MORPHOGENS = 5
 
 def safe_norm(x):
     return x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + 1e-8)
 
-def repulsion(x, xs, gamma, mask, k=5):
-    dx = x[None] - xs #N,2
-    d = jnp.linalg.norm(dx, axis=-1) #N,
-    d, ids = jax.lax.approx_min_k(jnp.where(mask, d, jnp.inf), k) #type:ignore
-    rep = jnn.sigmoid((gamma-d)*30.) #5,
-    dx = dx[ids] # 5, 2
-    dx_norm = dx / (d[:,None]+1e-8)
-    force = jnp.sum((dx_norm * rep[:,None]) * mask[ids,None], axis=0)
-    return force
 
-@jax.jit
-def migration_step(x, t, psi, gamma, mask, theta=None, dt=0.1, alpha=1., beta=1., temperature_decay=1.0, *, key):
+def migration_step(xs, t, psis, gammas, zetas, mask, thetas, dt=0.01, temperature_decay=0.98, 
+    migration_field=migration_field, *, key):
     
-    N, _ = x.shape
+    N, _ = xs.shape
     T = temperature_decay ** t
 
-    # Morphogen gradient forces
-    dx_m = jax.grad(lambda x, psi: (jax.vmap(morphogen_field)(x) * psi).sum())(x, psi)
+    M = migration_field
 
-    # Repulsion forces
-    dx_r = jax.vmap(repulsion, in_axes=(0,None,0, None))(x,x,gamma,mask)
+    def M_(x):
+        """Modified molecular field"""
+        d = jnp.sum(jnp.square(x[None]-xs), axis=-1, keepdims=True) #N,1
+        return M(x) + jnp.sum(zetas * jnp.exp(-d/(gammas+1e-6)) * mask[:,None], axis=0)
 
-    # Speed
-    speed = jnp.ones((N,1)) if theta is None else jnn.sigmoid((t - theta)*10.)[:,None]
+    def E(x, psi):
+        """energy field"""
+        return jnp.dot(M_(x), psi)
 
-    dx = alpha * dx_m + beta * dx_r 
-    dx = safe_norm(dx) * speed
-    dx = dx * mask[:,None] 
+    dx = - jax.vmap(jax.grad(E))(xs, psis)
+    dx_norm = jnp.linalg.norm(dx, axis=-1, keepdims=True)
+    dx = jnp.where(dx_norm>0, dx/dx_norm, dx)
+
+    xs = jnp.clip(xs + dt * T * dx, -1., 1.)
     
-    x = x + dx*dt*T*speed
-    norm = jnp.linalg.norm(x, axis=-1, keepdims=True)
-    x = jnp.where(norm>1., x / norm, x)
-    
-    return x
+    return xs
+
+# ======================================================
 
 
 dummy_policy_config = CTRNNPolicyConfig(lambda x:x, lambda x:x)
@@ -85,27 +82,30 @@ class Model_E(CTRNNPolicy):
     O: jax.Array
     A: nn.MLP
     # --- statics ---
-    alpha: float
-    beta: float
     n_types: int
     max_nodes: int
     dt: float
     dvpt_time: float
     temperature_decay: float
+    migration_field: Callable
     # ---
-    def __init__(self, n_types: int, n_morphogens: int, n_synaptic_markers: int, max_nodes_per_type: int=32, 
-                 alpha: float=1., beta: float=1., dt: float=0.1, dvpt_time: float=10., temperature_decay: float=1., 
+    def __init__(self, n_types: int, n_synaptic_markers: int, max_nodes_per_type: int=32, 
+                 dt: float=0.1, dvpt_time: float=10., temperature_decay: float=1., extra_migration_fields: int=3,
                  policy_cfg: CTRNNPolicyConfig=dummy_policy_config, *, key: jax.Array):
 
         super().__init__(policy_cfg)
         
         k1, k2 = jr.split(key)
+
+        n_fields = N_MORPHOGENS + extra_migration_fields
+        self.migration_field = lambda x: jnp.concatenate([migration_field(x),jnp.zeros(extra_migration_fields)])
         
         types = NeuronType(
-            pi = jnp.zeros(n_types),
-            psi = jnp.zeros((n_types, n_morphogens)),
+            pi = jnp.zeros(n_types, dtype=jnp.float16),
+            psi = jnp.zeros((n_types, n_fields)),
+            gamma = jnp.zeros((n_types, n_fields))+0.001,
+            zeta = jnp.zeros((n_types, n_fields)),
             omega = jnp.zeros((n_types, n_synaptic_markers)),
-            gamma = jnp.zeros((n_types,)),
             theta = jnp.ones(n_types),
             active = jnp.zeros(n_types),
             id_ = jnp.arange(n_types),
@@ -118,13 +118,11 @@ class Model_E(CTRNNPolicy):
         
         self.types = types
         self.O = jr.normal(k1, (n_synaptic_markers,)*2) * 0.1
-        self.A = nn.MLP(n_synaptic_markers+n_morphogens, n_synaptic_markers, 64, 1, key=k2)
+        self.A = nn.MLP(n_synaptic_markers+n_fields, n_synaptic_markers, 64, 1, key=k2)
         self.N = jnp.zeros(())
         
         self.n_types = n_types
         self.max_nodes = max_nodes_per_type * n_types
-        self.alpha = alpha
-        self.beta = beta
         self.dt = dt
         self.dvpt_time = dvpt_time
         self.temperature_decay = temperature_decay
@@ -146,14 +144,15 @@ class Model_E(CTRNNPolicy):
         
         # 2. Migrate
         step_fn = lambda i, x: migration_step(
-            x=x, t=self.dt*i, psi=node_types.psi, gamma=node_types.gamma, mask=node_types.active, 
-            theta=node_types.theta, dt=self.dt, temperature_decay=self.temperature_decay, key=jr.key(1), 
-            alpha=self.alpha, beta=self.beta
+            xs=x, t=self.dt*i, psis=node_types.psi, gammas=node_types.gamma, zetas=node_types.zeta, mask=node_types.active, 
+            thetas=node_types.theta, dt=self.dt, temperature_decay=self.temperature_decay, migration_field=self.migration_field, 
+            key=jr.key(1)
         )
         x = jax.lax.fori_loop(0, int(self.dvpt_time//self.dt), step_fn, x0)
+        #x, xs = jax.lax.scan(lambda x, i:(step_fn(i, x),x), x0, jnp.arange(int(self.dvpt_time//self.dt)))
         
         # 3. Connect
-        M = jax.vmap(morphogen_field)(x)
+        M = jax.vmap(self.migration_field)(x)
         g = jax.vmap(self.A)(jnp.concatenate([node_types.omega,M], axis=-1))
         W = g @ self.O @ g.T
         W = W * (node_types.active[:,None] * node_types.active[None])
@@ -169,16 +168,20 @@ class Model_E(CTRNNPolicy):
         return eqx.partition(self, eqx.is_array)
 
 
+# ======================= UTILS ===========================
+
+
 def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
     n_synaptic_markers = mdl.types.omega.shape[-1]
     n_total = n_sensory_neurons + n_motor_neurons
     sensory_type = NeuronType(
         pi = n_sensory_neurons/n_total, 
         id_ = 0,
-        psi = jnp.array([0.,1.,0., 0., 0., 0., 0.]),
+        psi = jnp.array([0.,-1.,0., 0., 0., 1., 0., 0.]),
+        gamma = jnp.array([0.,0.,0., 0., 0., 0.05, 0., 0.]),
+        zeta = jnp.array([0.,0.,0., 0., 0., 1., 0., 0.]),
         theta = 1.,
         omega = jnn.one_hot(0, n_synaptic_markers),
-        gamma = 0.4,
         active = 1.,
         s = 1.,
         m = 0.,
@@ -190,10 +193,11 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
     motor_type = NeuronType(
         pi = n_motor_neurons/n_total,
         id_ = 1,
-        psi = jnp.array([0.,-1.,0., 0., 0., 0., 0.]),
+        psi = jnp.array([0.,1.,0., 0., 0., 0., 1., 0.]),
+        gamma = jnp.array([0.,0.,0., 0., 0., 0., 0.08, 0.]),
+        zeta = jnp.array([0.,0.,0., 0., 0., 0., 1., 0.]),
         theta = 1.,
         omega = jnn.one_hot(1, n_synaptic_markers),
-        gamma = 0.5,
         active = 1.,
         s = 0.,
         m = 1.,
@@ -213,10 +217,11 @@ def make_single_type(mdl, n_neurons):
     sensorimotor_type = NeuronType(
         pi = 1., 
         id_ = 0,
-        psi = jnp.zeros(N_MORPHOGENS),
+        psi = jnp.array([0.,0.,0., 0., 0., 1., 0., 0.]),
+        gamma = jnp.array([0.,0.,0., 0., 0., 0.1, 0., 0.]),
+        zeta = jnp.array([0.,0.,0., 0., 0., 1., 0., 0.]),
         theta = 1.,
         omega = jnn.one_hot(0, n_synaptic_markers),
-        gamma = 0.5,
         active = 1.,
         s = 1.,
         m = 1.,
@@ -230,6 +235,7 @@ def make_single_type(mdl, n_neurons):
     mdl = eqx.tree_at(lambda x: [x.types,x.N], mdl, [types,n_neurons/10.])
     return mdl
 
+# ========================= EVOLUTION =============================
 
 def duplicate_type(model, key):
     k1, k2 = jr.split(key)
@@ -283,10 +289,21 @@ def mutate(prms: jax.Array, key: jax.Array, p_duplicate: float, sigma_mut: float
 
 
 if __name__ == '__main__':
-	import matplotlib.pyplot as plt
-	model = Model_E(4, N_MORPHOGENS, 8, key=jr.key(1), beta=1.0, alpha=1.0)
-	model = make_two_types(model, 8, 2)
-	ctrnn = model.initialize(jr.key(2))
-	render_network(ctrnn)
-	plt.show()
-    
+    import matplotlib.pyplot as plt
+    model = Model_E(4, N_MORPHOGENS, 8, key=jr.key(1))
+    model = make_two_types(model, 10, 4)
+    ctrnn = model.initialize(jr.key(2))
+
+    # fig, ax = plt.subplots(1,2, figsize=(10,5), sharey=True)
+    # msk = ctrnn.mask.astype(bool)
+    # c = plt.cm.Set1(ctrnn.id_[msk])
+    # for i, x in enumerate(xs[:-1]):
+    #     alpha = (i/xs.shape[0]) * 0.5 + 0.1
+    #     ax[0].scatter(*x[msk].T, c=c, alpha=alpha)
+
+    # x = xs[-1,msk]
+
+    # render_network(ctrnn, ax=ax[1])
+
+    # plt.show()
+    # 
