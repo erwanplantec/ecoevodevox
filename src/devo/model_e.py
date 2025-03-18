@@ -309,6 +309,7 @@ def duplicate_type(model, key):
 def mutate(prms: jax.Array,
            key: jax.Array, 
            p_duplicate: float, 
+           mut_proba: float,
            sigma_mut: float, 
            mutation_mask: jax.Array, 
            shaper: ex.ParameterReshaper, 
@@ -323,7 +324,9 @@ def mutate(prms: jax.Array,
         return prms, dupl
 
     def _mutate(prms, key):
-        epsilon = jr.normal(key, prms.shape) * sigma_mut * mutation_mask
+        k1, k2 = jr.split(key)
+        mut_locs = jr.bernoulli(k1, mut_proba, prms.shape).astype(float)
+        epsilon = jr.normal(k2, prms.shape) * sigma_mut * mutation_mask * mut_locs 
         prms = prms + epsilon
         prms = jnp.clip(prms, clip_min, clip_max)
         return prms

@@ -43,18 +43,18 @@ def make_activations_to_action_fn(action_embeddings, decay_rate=5., is_discrete=
     # ---
     return a2a
 
-
 class Config(NamedTuple):
     env: str="CartPole-v1"
     gens: int=128
     pop: int=256
     eval_reps: int=1
     log: bool=True
+    elite_ratio: float=0.2
     p_duplicate: float=0.1
+    p_mut: float=1.0
     sigma: float=0.1
     N0: int=8
     init_cfg: str="single"
-
 
 def train(cfg: Config):
 
@@ -101,6 +101,7 @@ def train(cfg: Config):
         prms = params_shaper.reshape(archive)
         log_data["active types"] = prms.types.active.sum(-1) #type:ignore
         log_data["network sizes"] = policy_states.mask[:,-1].sum(-1)
+        log_data["archive fitnesses"] = state.fitness
         # eval
         x = state.archive[0]
         prms = params_shaper.reshape_single(x)
@@ -113,7 +114,11 @@ def train(cfg: Config):
         log_data["evaluation: active types"] = policy.types.active.sum()
         return log_data, ckpt_data, ep
         
-    tsk = rx.GymnaxTask(cfg.env, fctry)
+    _tsk = rx.GymnaxTask(cfg.env, fctry)
+    def tsk(prms, key, data=None):
+        fitness, data = _tsk(prms, key, data)
+
+        return fitness
 
 
     mutation_mask = jax.tree.map(lambda x: jnp.ones_like(x), init_prms)
@@ -126,9 +131,9 @@ def train(cfg: Config):
     clip_min = params_shaper.flatten_single(clip_min)
     clip_max = jax.tree.map(lambda x: jnp.full_like(x, jnp.inf), init_prms)
     clip_max = params_shaper.flatten_single(clip_max)
-    mutation_fn = lambda x, k, s: mutate(x, k, cfg.p_duplicate, s.sigma, mutation_mask, params_shaper, clip_min, clip_max, n_types) #type:ignore
+    mutation_fn = lambda x, k, s: mutate(x, k, cfg.p_duplicate, cfg.p_mut, s.sigma, mutation_mask, params_shaper, clip_min, clip_max, n_types) #type:ignore
 
-    ga = GA(mutation_fn, prms, cfg.pop, elite_ratio=0.5, sigma_init=cfg.sigma, sigma_decay=1., sigma_limit=0.01, p_duplicate=cfg.p_duplicate)
+    ga = GA(mutation_fn, prms, cfg.pop, elite_ratio=cfg.elite_ratio, sigma_init=cfg.sigma, sigma_decay=1., sigma_limit=0.01, p_duplicate=cfg.p_duplicate)
 
     logger = rx.Logger(True, metrics_fn)
     trainer = rx.EvosaxTrainer(cfg.gens, ga, tsk, params_like=prms, eval_reps=cfg.eval_reps, logger=logger)
