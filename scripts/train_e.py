@@ -1,4 +1,6 @@
 from functools import partial
+
+from jax.flatten_util import ravel_pytree
 from src.devo.model_e import *
 from src.utils.viz import render_network
 from src.evo.ga import GA
@@ -20,19 +22,23 @@ def random_key():
 def make_obs_to_input_fn(input_embeddings, decay_rate=5., max_radius=0.5):
     # ---
     def o2I(net, obs):
-        dist = jnp.linalg.norm(net.x[:,None] - input_embeddings[None], axis=-1)
-        influence = jnp.exp(-dist*decay_rate) * (dist < max_radius)
-        I = jnp.sum(influence * obs[None], axis=1) * net.s * net.mask
+        dist = jnp.linalg.norm(net.x[:,None] - input_embeddings[None], axis=-1) #N,O
+        influence = jnp.exp(-dist*decay_rate) * (dist < max_radius) #N,O
+        I = jnp.sum(influence * obs[None], axis=1) * net.s[:,0] * net.mask
         return I
     # ---
     return o2I
 
 def make_activations_to_action_fn(action_embeddings, decay_rate=5., is_discrete=True, max_radius=1.):
     # ---
-    def a2a(net):
+    def a2a(net: CTRNN):
+        # ---
+        assert net.m is not None
+        assert net.mask is not None
+        # ---
         dist = jnp.linalg.norm(net.x[:,None] - action_embeddings[None], axis=-1)
         influence = jnp.exp(-dist*decay_rate) * (dist < max_radius)
-        act = jnp.sum(influence * net.a[:,None] * net.m[:, None] * net.mask[:,None], axis=0)
+        act = jnp.sum(influence * net.v[:,None] * net.m[:, None] * net.mask[:,None], axis=0)
         return act if not is_discrete else jnp.argmax(act)
     # ---
     return a2a
@@ -49,22 +55,20 @@ class Config(NamedTuple):
     N0: int=8
 
 
-
 def train(cfg: Config):
+
     obs_dims, action_dims, is_discrete = rx.ENV_SPACES[cfg.env]
 
-    input_angles = jnp.linspace(jnp.pi/3, 2*jnp.pi/3, obs_dims)
-    input_embeddings = jnp.stack([jnp.cos(input_angles), jnp.sin(input_angles)], axis=-1)
-    encode_fn = make_obs_to_input_fn(input_embeddings)
+    input_embeddings = jnp.ones((obs_dims, 2)).at[:,0].set(jnp.linspace(-1, 1, obs_dims))
+    action_embeddings = jnp.full((action_dims, 2), -1.).at[:,0].set(jnp.linspace(-1,1,action_dims))
 
-    output_angles = jnp.linspace(-jnp.pi/3, -2*jnp.pi/3, action_dims) if action_dims>1 else jnp.array([-jnp.pi/2])
-    output_embeddings = jnp.stack([jnp.cos(output_angles), jnp.sin(output_angles)], axis=-1) 
-    decode_fn = make_activations_to_action_fn(output_embeddings, is_discrete=is_discrete)
+    encode_fn = make_obs_to_input_fn(input_embeddings)
+    decode_fn = make_activations_to_action_fn(action_embeddings)
 
     n_types = 8
     policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
-    policy = Model_E(n_types, N_MORPHOGENS, 8, 32, alpha=1., beta=0.2, dt=0.1, dvpt_time=10., policy_cfg=policy_cfg, key=random_key())
-    policy = make_single_type(policy, cfg.N0)
+    policy = Model_E(n_types, 8, dt=0.1, dvpt_time=10., policy_cfg=policy_cfg, key=random_key())
+    policy = make_two_types(policy, 8, 2)
 
     # ---
     # net = policy.initialize(random_key())
@@ -91,7 +95,7 @@ def train(cfg: Config):
         policy_states = data["eval_data"]["policy_states"] # P, T, ...
         archive = state.archive
         prms = params_shaper.reshape(archive)
-        log_data["active types"] = prms.types.active.sum(-1)
+        log_data["active types"] = prms.types.active.sum(-1) #type:ignore
         log_data["network sizes"] = policy_states.mask[:,-1].sum(-1)
         # eval
         x = state.archive[0]
@@ -107,16 +111,21 @@ def train(cfg: Config):
         
     tsk = rx.GymnaxTask(cfg.env, fctry)
 
+
     mutation_mask = jax.tree.map(lambda x: jnp.ones_like(x), init_prms)
     mutation_mask = eqx.tree_at(lambda t: t.types.active, mutation_mask, jnp.zeros_like(init_prms.types.active))
     mutation_mask = eqx.tree_at(lambda t: t.types.id_, mutation_mask, jnp.zeros_like(init_prms.types.id_))
     mutation_mask = params_shaper.flatten_single(mutation_mask)
     clip_min = jax.tree.map(lambda x: jnp.full_like(x, -jnp.inf), init_prms)
+    clip_min = eqx.tree_at(lambda tree: tree.types.gamma, clip_min, jnp.full_like(init_prms.types.gamma, 1e-8))
     clip_min = eqx.tree_at(lambda tree: tree.types.pi, clip_min, jnp.zeros_like(init_prms.types.pi))
     clip_min = params_shaper.flatten_single(clip_min)
     clip_max = jax.tree.map(lambda x: jnp.full_like(x, jnp.inf), init_prms)
     clip_max = params_shaper.flatten_single(clip_max)
-    mutation_fn = lambda x, k, s: mutate(x, k, cfg.p_duplicate, s.sigma, mutation_mask, params_shaper, clip_min, clip_max, n_types)
+    mutation_fn = lambda x, k, s: mutate(x, k, cfg.p_duplicate, s.sigma, mutation_mask, params_shaper, clip_min, clip_max, n_types) #type:ignore
+
+
+
 
     ga = GA(mutation_fn, prms, cfg.pop, elite_ratio=0.5, sigma_init=cfg.sigma, sigma_decay=1., sigma_limit=0.01, p_duplicate=cfg.p_duplicate)
 
@@ -136,5 +145,20 @@ def train(cfg: Config):
     wandb.finish()
 
 if __name__ == '__main__':
-    cfg = Config(pop=64, gens=16, p_duplicate=0.01, sigma=0.05, N0=8)
+    jax.config.update("jax_debug_nans", True)
+
+    cfg = Config(pop=256, gens=16, p_duplicate=0.01, sigma=0.01, N0=8)
     train(cfg)
+
+    # tsk = rx.GymnaxTask("CartPole-v1")
+    # o, s, *_ = tsk.reset(jr.key(1))
+    # k = jr.key(2)
+    # for _ in range(10):
+    #     k, k1, k2 = jr.split(k, 3)
+    #     a = jr.choice(k1, jnp.arange(1))
+    #     o, s, *_ = tsk.step(k2, s, a)
+    #     print(o)
+
+
+
+

@@ -2,6 +2,9 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import jax.nn as jnn
+import jax.scipy as jsp
+import equinox.nn as nn
+from functools import partial
 
 
 def minivmap(func, minibatch_size, check_func=None, default_output=None, func_takes_batch=False):
@@ -45,13 +48,33 @@ def minivmap(func, minibatch_size, check_func=None, default_output=None, func_ta
 	return mapped_func
 
 
+f16, f32, i8, i16, i32, i64 = jnp.float16, jnp.float32, jnp.uint8, jnp.uint16, jnp.uint32, jnp.uint64
+MAX_INT16 = jnp.iinfo(jnp.uint16).max
+boolean_maxpool = lambda x: nn.Pool(init=False, operation=jnp.logical_or, num_spatial_dims=2, padding=1, kernel_size=3)(x[None])[0]
+convolve = partial(jsp.signal.convolve, mode="same")
 
-import wandb
+def neighbor_states_fn(x, include_center=True, neighborhood="moore"):
+	if x.ndim>2:
+		extra_offs = (0,)*(x.ndim-2)
+	else:
+		extra_offs = ()
+	if neighborhood=="moore":
+		shifts = [(*extra_offs, 0,1), (*extra_offs, 1,0), (*extra_offs, 0,-1), (*extra_offs, -1,0)]
+	elif neighborhood=="vn":
+		shifts = [(*extra_offs, di, dj) for di in [-1,0,1] for dj in [-1,0,1]]
+	else:
+		raise ValueError(f"neighborhood {neighborhood} is not valid. must be either 'moore' or 'vn'")
+	output = jnp.stack([jnp.roll(x, shift) for shift in shifts])
+	if include_center:
+		output = jnp.concatenate([x[None], output], axis=0)
+	return output
 
-class EnvLogWrapper:
-	# ---
-	def __init__(self, env):
-		self.env = env
-	# ---
-	def step():
-		pass
+def moore_neighborhood(x, i, j):
+	C, H, W = x.shape
+	return jax.lax.dynamic_slice(x, [jnp.array(0,dtype=i16),i,j], [C,3,3])
+
+def k_neighborhood(x, i, j, k=1):
+	"""return size k neighborhood (moore=>k=1)"""
+	C, H, W = x.shape
+	window_sz = k*2+1
+	return jax.lax.dynamic_slice(x, [jnp.array(0,dtype=i16),i,j], [C,window_sz,window_sz])

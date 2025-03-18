@@ -6,7 +6,7 @@ from typing import NamedTuple, Callable
 
 class CTRNN(NamedTuple):
     x: jax.Array
-    a: jax.Array
+    v: jax.Array
     tau: jax.Array
     gain: jax.Array
     bias: jax.Array
@@ -18,11 +18,11 @@ class CTRNN(NamedTuple):
 
 @eqx.filter_jit
 def forward_ctrnn(ctrnn: CTRNN, I: jax.Array, dt: float=0.1, f: Callable=jnn.tanh):
-    _, a, tau, gain, bias, W, mask, *_ = ctrnn
-    y = f(gain*(a+bias)) * mask
-    da = - (a) + jnp.matmul(W, y) + I
-    a = a + dt * (1/tau)  * da
-    return a * mask
+    _, v, tau, gain, bias, W, mask, *_ = ctrnn
+    y = f(gain*(v+bias)) * mask
+    dv = - (v) + jnp.matmul(W, y) + I
+    v = v + dt * (1/tau)  * dv
+    return v * mask
 
 class CTRNNPolicyConfig(NamedTuple):
     # ---
@@ -53,7 +53,7 @@ class CTRNNPolicy(eqx.Module):
         I = self.encode(state, obs)
         # forward network
         forward_fn = lambda i, state: state._replace(
-            a=forward_ctrnn(state, I, dt=self.dt, f=self.activation_fn))
+            v=forward_ctrnn(state, I, dt=self.dt, f=self.activation_fn))
         state = jax.lax.fori_loop(0, self.iters, forward_fn, state)
         # decode action
         action = self.decode(state)

@@ -1,3 +1,5 @@
+from numpy import sign
+from ..eco.gridworld import Observation
 from ..utils.viz import render_network
 from .ctrnn import CTRNN, CTRNNPolicy, CTRNNPolicyConfig
 
@@ -44,7 +46,6 @@ N_MORPHOGENS = 5
 def safe_norm(x):
     return x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + 1e-8)
 
-
 def migration_step(xs, t, psis, gammas, zetas, mask, thetas, dt=0.01, temperature_decay=0.98, 
     migration_field=migration_field, *, key):
     
@@ -52,7 +53,6 @@ def migration_step(xs, t, psis, gammas, zetas, mask, thetas, dt=0.01, temperatur
     T = temperature_decay ** t
 
     M = migration_field
-
     def M_(x):
         """Modified molecular field"""
         d = jnp.sum(jnp.square(x[None]-xs), axis=-1, keepdims=True) #N,1
@@ -89,8 +89,8 @@ class Model_E(CTRNNPolicy):
     temperature_decay: float
     migration_field: Callable
     # ---
-    def __init__(self, n_types: int, n_synaptic_markers: int, max_nodes_per_type: int=32, 
-                 dt: float=0.1, dvpt_time: float=10., temperature_decay: float=1., extra_migration_fields: int=3,
+    def __init__(self, n_types: int, n_synaptic_markers: int, max_nodes_per_type: int=32, sensory_dimensions: int=1, 
+                 motor_dimensions: int=1, dt: float=0.1, dvpt_time: float=10., temperature_decay: float=1., extra_migration_fields: int=3,
                  policy_cfg: CTRNNPolicyConfig=dummy_policy_config, *, key: jax.Array):
 
         super().__init__(policy_cfg)
@@ -109,8 +109,8 @@ class Model_E(CTRNNPolicy):
             theta = jnp.ones(n_types),
             active = jnp.zeros(n_types),
             id_ = jnp.arange(n_types),
-            s = jnp.zeros(n_types),
-            m = jnp.zeros(n_types),
+            s = jnp.zeros((n_types,sensory_dimensions)),
+            m = jnp.zeros((n_types, motor_dimensions)),
             tau = jnp.ones(n_types),
             bias= jnp.zeros(n_types),
             gain = jnp.ones(n_types)
@@ -118,7 +118,7 @@ class Model_E(CTRNNPolicy):
         
         self.types = types
         self.O = jr.normal(k1, (n_synaptic_markers,)*2) * 0.1
-        self.A = nn.MLP(n_synaptic_markers+n_fields, n_synaptic_markers, 64, 1, key=k2)
+        self.A = nn.MLP(n_synaptic_markers+n_fields, n_synaptic_markers, 16, 1, key=k2)
         self.N = jnp.zeros(())
         
         self.n_types = n_types
@@ -141,6 +141,7 @@ class Model_E(CTRNNPolicy):
         node_type_ids = self.n_types - node_type_ids
         node_type_ids = jnp.where(node_type_ids < self.n_types, node_type_ids, -1).astype(int)
         node_types = jax.tree.map(lambda x: x[node_type_ids], self.types)
+
         
         # 2. Migrate
         step_fn = lambda i, x: migration_step(
@@ -148,17 +149,21 @@ class Model_E(CTRNNPolicy):
             thetas=node_types.theta, dt=self.dt, temperature_decay=self.temperature_decay, migration_field=self.migration_field, 
             key=jr.key(1)
         )
-        x = jax.lax.fori_loop(0, int(self.dvpt_time//self.dt), step_fn, x0)
-        #x, xs = jax.lax.scan(lambda x, i:(step_fn(i, x),x), x0, jnp.arange(int(self.dvpt_time//self.dt)))
+        xs = jax.lax.fori_loop(0, int(self.dvpt_time//self.dt), step_fn, x0)
         
         # 3. Connect
-        M = jax.vmap(self.migration_field)(x)
+        def molecular_field(x):
+            """Modified molecular field"""
+            d = jnp.sum(jnp.square(x[None]-xs), axis=-1, keepdims=True) #N,1
+            return self.migration_field(x) + jnp.sum(node_types.zeta * jnp.exp(-d/(node_types.gamma+1e-6)) * node_types.active[:,None], axis=0)
+        
+        M = jax.vmap(molecular_field)(xs)
         g = jax.vmap(self.A)(jnp.concatenate([node_types.omega,M], axis=-1))
         W = g @ self.O @ g.T
         W = W * (node_types.active[:,None] * node_types.active[None])
         network = CTRNN(
-            a=jnp.zeros(x.shape[0]), 
-            x=x, W=W, tau=node_types.tau, gain=node_types.gain, bias=node_types.bias, 
+            v=jnp.zeros(xs.shape[0]), 
+            x=xs, W=W, tau=node_types.tau, gain=node_types.gain, bias=node_types.bias, 
             s=node_types.s, m=node_types.m, id_=node_types.id_, mask=node_types.active
         )
         
@@ -168,7 +173,7 @@ class Model_E(CTRNNPolicy):
         return eqx.partition(self, eqx.is_array)
 
 
-# ======================= UTILS ===========================
+# =================== HANDCRAFTED NETWORKS ==========================
 
 
 def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
@@ -235,6 +240,46 @@ def make_single_type(mdl, n_neurons):
     mdl = eqx.tree_at(lambda x: [x.types,x.N], mdl, [types,n_neurons/10.])
     return mdl
 
+# ========================= INTERFACE =============================
+
+def gridworld_sensory_interface(obs: Observation, ctrnn: CTRNN, fov: int=1):
+    # ---
+    assert ctrnn.s is not None
+    # ---
+    x = ctrnn.x
+    # ---
+    C = obs.chemicals # mC,W,W
+    W = obs.walls
+    mC, *_ = C.shape
+    j, i = jnp.round((x*jnp.array([[1,-1]]))*fov+1).astype(int).T
+
+    Ic = jnp.sum(C[:,i,j].T * ctrnn.s[:,:mC], axis=1) # chemical input
+    Iw = W[i,j] * ctrnn.s[:,mC]
+    Ii = jnp.sum(ctrnn.s[:, mC+1:] * obs.internal, axis=1) # internal input
+
+    return Ic + Iw + Ii
+
+
+def gridworld_motor_interface(ctrnn: CTRNN, threshold_to_move: float=1.0):
+    # ---
+    assert ctrnn.m is not None
+    # --- 
+    x = ctrnn.x
+    m = ctrnn.m
+    v = ctrnn.v
+    # ---
+    mask = jnp.max(jnp.abs(x),axis=-1)>0.5
+    maximum_component = jnn.one_hot(jnp.argmax(jnp.abs(x), axis=-1), 2)
+    x = x*maximum_component
+    effects = jnp.round(x * jnp.array([[-1,1]]))[:,::-1] * mask[:,None]
+    effects = effects * v[:,None] * m[:,None]
+    move = jnp.sum(effects, axis=0)
+    print(move)
+    move = move * (jnp.abs(move).max()>=threshold_to_move)
+    move_rep =  jnp.array([[1,0],[0,1],[-1,0],[0,-1],[0,0]])
+    move_idx = jnp.argmin(jnp.square(move_rep - move[None]).sum(-1))
+    return move_idx
+
 # ========================= EVOLUTION =============================
 
 def duplicate_type(model, key):
@@ -261,9 +306,15 @@ def duplicate_type(model, key):
     return model, jnn.one_hot(i, num_classes=types.psi.shape[0])
 
 
-def mutate(prms: jax.Array, key: jax.Array, p_duplicate: float, sigma_mut: float, 
-           mutation_mask: jax.Array, shaper: ex.ParameterReshaper, 
-           clip_min: jax.Array, clip_max: jax.Array, n_types: int):
+def mutate(prms: jax.Array,
+           key: jax.Array, 
+           p_duplicate: float, 
+           sigma_mut: float, 
+           mutation_mask: jax.Array, 
+           shaper: ex.ParameterReshaper, 
+           clip_min: jax.Array, 
+           clip_max: jax.Array, 
+           n_types: int):
 
     def _duplicate(prms, key):
         mdl = shaper.reshape_single(prms)
@@ -290,20 +341,35 @@ def mutate(prms: jax.Array, key: jax.Array, p_duplicate: float, sigma_mut: float
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
-    model = Model_E(4, N_MORPHOGENS, 8, key=jr.key(1))
-    model = make_two_types(model, 10, 4)
-    ctrnn = model.initialize(jr.key(2))
+    x=jnp.mgrid[-10:11,-10:11].transpose((1,2,0)).reshape((-1,2)) / 10
+    N=x.shape[0]
+    ctrnn = CTRNN(
+        x=x,
+        v=jnp.zeros(N), 
+        tau=None, #type:ignore
+        gain=None, #type:ignore
+        bias=None,#type:ignore
+        W=None, #type:ignore
+        m=jnp.ones(N), 
+        s=jnp.ones((N,3)), 
+        id_=None)
+    
+    obs = Observation(
+        chemicals = jnp.array([
+            [[0.,0.,0.],
+             [0.,0.,0.],
+             [0.,1.,0.]]
+        ]),
+        walls = jnp.array([[0.,0.,0.],
+                           [0.,0.,0.],
+                           [0.,0.,0.]]),
+        internal=jnp.zeros(2)
+    )
+    I = gridworld_sensory_interface(obs, ctrnn)
+    #plt.scatter(*ctrnn.x.T, c=I)
+    #plt.show()
 
-    # fig, ax = plt.subplots(1,2, figsize=(10,5), sharey=True)
-    # msk = ctrnn.mask.astype(bool)
-    # c = plt.cm.Set1(ctrnn.id_[msk])
-    # for i, x in enumerate(xs[:-1]):
-    #     alpha = (i/xs.shape[0]) * 0.5 + 0.1
-    #     ax[0].scatter(*x[msk].T, c=c, alpha=alpha)
+    ctrnn = ctrnn._replace(v=I)
 
-    # x = xs[-1,msk]
-
-    # render_network(ctrnn, ax=ax[1])
-
-    # plt.show()
-    # 
+    a = gridworld_motor_interface(ctrnn)
+    print(a)

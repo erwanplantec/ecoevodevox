@@ -11,35 +11,20 @@ from celluloid import Camera
 
 import matplotlib.pyplot as plt
 
-from typing import Callable, NamedTuple, Tuple, TypeAlias
-from jaxtyping import Bool, Float, Float16, Int, Int16, Int32, Int64, Int8, PyTree
+from typing import Callable, NamedTuple, Tuple, TypeVar
+from jaxtyping import Array, Bool, Float, Float16, Int, Int16, Int32, Int64, Int8, PyTree
 
-from src.eco.utils import minivmap
+# ======================== UTILS =============================
 
-f16, f32, i8, i16, i32, i64 = jnp.float16, jnp.float32, jnp.uint8, jnp.uint16, jnp.uint32, jnp.uint64
-MAX_INT16 = jnp.iinfo(jnp.uint16).max
-boolean_maxpool = lambda x: nn.Pool(init=False, operation=jnp.logical_or, num_spatial_dims=2, padding=1, kernel_size=3)(x[None])[0]
-convolve = partial(jsp.signal.convolve, mode="same")
+from .utils import *
 
-def neighbor_states_fn(x, include_center=True, neighborhood="moore"):
-	if x.ndim>2:
-		extra_offs = (0,)*(x.ndim-2)
-	else:
-		extra_offs = ()
-	if neighborhood=="moore":
-		shifts = [(*extra_offs, 0,1), (*extra_offs, 1,0), (*extra_offs, 0,-1), (*extra_offs, -1,0)]
-	elif neighborhood=="vn":
-		shifts = [(*extra_offs, di, dj) for di in [-1,0,1] for dj in [-1,0,1]]
-	else:
-		raise ValueError(f"neighborhood {neighborhood} is not valid. must be either 'moore' or 'vn'")
-	output = jnp.stack([jnp.roll(x, shift) for shift in shifts])
-	if include_center:
-		output = jnp.concatenate([x[None], output], axis=0)
-	return output
+type FoodMap = Int[Array, "F H W"]
+type KeyArray = jax.Array
+type AgentState = PyTree
+type AgentParams = jax.Array
+type Action = jax.Array
 
-def moore_neighborhood(x, i, j):
-	C, H, W = x.shape
-	return jax.lax.dynamic_slice(x, [jnp.array(0,dtype=i16),i,j], [C,3,3])
+# ============================================================
 
 class Agent(NamedTuple):
 	# ---
@@ -50,6 +35,7 @@ class Agent(NamedTuple):
 	position: Int16
 	energy: Float16
 	reward: Int8
+	reproduce: Bool
 	time_above_threshold: Int16
 	time_below_threshold: Int16
 	n_offsprings: Int16
@@ -58,12 +44,18 @@ class Agent(NamedTuple):
 	# ---
 	prms: PyTree
 
+class ChemicalType(NamedTuple):
+	diffusion_rate: Float16
+
 class FoodType(NamedTuple):
 	reproduction_rate: Float16
-	diffusion_rate: Float16
+	expansion_rate: Float16
+	max_concentration: Int16
+	chemical_signature: Float16
 	energy_concentration: Float16
+	spontaneous_grow_prob: Float16
 
-FoodMap: TypeAlias=jax.Array
+_food_types_types = FoodType(f16, f16, i16, f16, f16, f16)
 
 class EnvState(NamedTuple):
 	agents: Agent
@@ -76,55 +68,57 @@ class Observation(NamedTuple):
 	internal: jax.Array
 	walls: jax.Array
 
-KeyArray: TypeAlias = jax.Array
-AgentState: TypeAlias = PyTree
-AgentParams: TypeAlias = jax.Array
-Action: TypeAlias = jax.Array
-
 class GridWorld:
 	# ---
 	def __init__(
 		self, 
+		size: Tuple[int, int],
 		agent_fctry: Callable[[KeyArray], AgentParams], 
 		agent_init: Callable[[AgentParams, KeyArray], AgentState],
 		agent_apply: Callable[[AgentParams, Observation, AgentState, KeyArray], Action],
-		food_types: FoodType, 
-		size: Tuple[int, int], 
 		mutation_fn: Callable[[AgentParams,KeyArray],AgentParams], 
+		chemical_types: ChemicalType,
+		food_types: FoodType,  
 		max_agents: int=1_024, 
 		init_agents: int=256,
-		predation: bool=True,
+		passive_eating: bool=True,
+		passive_reproduction: bool=True,
+		predation: bool=False,
 		max_age: int=1_000,
+		field_of_view: int=1,
 		birth_pool_size: int|None=None,
 		energy_reproduction_threshold: float=0.,
 		reproduction_energy_cost: float=0.5,
+		predation_energy_gain: float=5.,
+		predation_energy_cost: float=0.1,
 		move_energy_cost: float=0.1,
-		base_energy_loss: float=0.1,
-		max_energy: float=3.0,
+		base_energy_loss: float=0.05,
+		max_energy: float=10.0,
 		time_above_threshold_to_reproduce: int=20,
 		time_below_threshold_to_die: int=10,
 		initial_agent_energy: float=1.0,
-		agent_scent_diffusion: float=1.0,
-		initial_food_density: float=0.01,
-		spontaneous_grow_prob: float=0.0,
+		initial_food_density: Float=0.01,
 		chemical_detection_threshold: float=0.01,
 		deadly_walls: bool=False,
-		perception_neighborhood: str="moore",
 		size_apply_minibatches: int|None=None,
 		size_init_minibatches: int|None=None):
 		
 		self.size = size
 		self.walls = jnp.pad(jnp.zeros([s-2 for s in self.size], dtype=f16), 1, constant_values=1)
 		self.deadly_walls = deadly_walls
-		self.perception_neighborhood = perception_neighborhood
 
-		self.food_types = jax.tree.map(lambda x: x.astype(f16), food_types)
-		self.nb_food_types = food_types.diffusion_rate.shape[0]
-		self.initial_food_density = initial_food_density
-		self.spontaneous_grow_prob = spontaneous_grow_prob
+		self.food_types = jax.tree.map(lambda x, ty: x.astype(ty), food_types, _food_types_types)
+		self.nb_food_types = food_types.reproduction_rate.shape[0]
+		self.initial_food_density = jnp.full((self.nb_food_types,), initial_food_density)
+		growth_kernels = jnp.stack([jnp.array([[0.0, r/4, 0.0],
+					       					   [r/4, 1-r, r/4],
+					       					   [0.0, r/4, 0.0]], dtype=f16) for r in self.food_types.expansion_rate])
+		self.food_growth_kernels = growth_kernels * self.food_types.reproduction_rate[:,None,None]
+	
+		self.chemical_types = chemical_types
 		sx, sy = self.size
 		norms = jnp.linalg.norm(jnp.mgrid[-sx//2:sx//2, -sy//2:sy//2], axis=0)
-		diffusion_rates = food_types.diffusion_rate
+		diffusion_rates = self.chemical_types.diffusion_rate
 		self.chemicals_diffusion_kernels = jnp.stack([jnp.exp(-norms/r) for r in diffusion_rates])
 
 		self.mutation_fn = mutation_fn
@@ -157,6 +151,9 @@ class GridWorld:
 		self.init_agents = init_agents
 		self.birth_pool_size = birth_pool_size if birth_pool_size is not None else max_agents
 		self.predation = predation
+		self.field_of_view = field_of_view
+		self.passive_eating = passive_eating
+		self.passive_reproduction = passive_reproduction
 		self.energy_reproduction_threshold = energy_reproduction_threshold
 		self.time_above_threshold_to_reproduce = time_above_threshold_to_reproduce
 		self.time_below_threshold_to_die = time_below_threshold_to_die
@@ -164,12 +161,20 @@ class GridWorld:
 		self.reproduction_energy_cost = reproduction_energy_cost
 		self.base_energy_loss = base_energy_loss
 		self.max_energy = max_energy
-		self.agent_scent_diffusion_kernel = jnp.exp(-norms/agent_scent_diffusion**2)
+		self.agent_scent_diffusion_kernel = jnp.array([[ 0.1 , 0.1 , 0.1 ],
+													   [ 0.1 , 1.0 , 0.1 ],
+													   [ 0.1 , 0.1 , 0.1 ]], dtype=f16)
 		self.chemical_detection_threshold = chemical_detection_threshold
 		self.move_energy_cost = move_energy_cost
+		self.predation_energy_gain = predation_energy_gain
+		self.predation_energy_cost = predation_energy_cost
 		self.max_age = max_age
 
-		self.n_actions = 6 
+	# ---
+
+	@property
+	def n_actions(self):
+		return 5 + int(not self.passive_eating) + int(not self.passive_reproduction) + int(self.predation)
 
 	# ---
 
@@ -182,7 +187,11 @@ class GridWorld:
 		# --- 2. Get and apply actions ---
 		key, key_action = jr.split(key)
 		observations = self._get_observations(state)
-		actions, policy_states = self.mapped_agent_apply(state.agents.prms, observations, state.agents.policy_state, jr.split(key_action, self.max_agents), state.agents.alive)
+		actions, policy_states = self.mapped_agent_apply(state.agents.prms, 
+														 observations, 
+														 state.agents.policy_state, 
+														 jr.split(key_action, self.max_agents), 
+														 state.agents.alive)
 		state = eqx.tree_at(lambda s: s.agents.policy_state, state, policy_states)
 		state = self._apply_actions(state, actions)
 
@@ -214,7 +223,8 @@ class GridWorld:
 		return Agent(
 			alive=alive, 
 			prms=prms, 
-			energy=jnp.full((self.max_agents), self.initial_agent_energy, dtype=f16)*alive, 
+			energy=jnp.full((self.max_agents), self.initial_agent_energy, dtype=f16)*alive,
+			reproduce=jnp.full((self.max_agents,), False, dtype=bool), 
 			time_above_threshold=jnp.full((self.max_agents,), 0, dtype=i8), 
 			time_below_threshold=jnp.full((self.max_agents,), 0, dtype=i8),
 			position=jr.randint(key_pos, (self.max_agents, 2), minval=1, maxval=jnp.array(self.size, dtype=i16)-1, dtype=i16), 
@@ -325,7 +335,7 @@ class GridWorld:
 			return agents
 		# ---	
 
-		reproducing = (agents_tat > self.time_above_threshold_to_reproduce) # N,
+		reproducing = agents.reproduce # N,
 
 		agents = jax.lax.cond(jnp.any(reproducing), _reproduce, lambda _, agents: agents, reproducing, agents)
 
@@ -339,22 +349,24 @@ class GridWorld:
 		"""
 		returns agents observations
 		"""
-		chemical_fields = jax.vmap(lambda x, k: jsp.signal.convolve(x, k, mode="same", method="fft"))(state.food, self.chemicals_diffusion_kernels)
+		chemical_fields = jnp.sum(state.food[:,None] * self.food_types.chemical_signature[...,None,None], axis=0)
+		chemical_fields = jax.vmap(lambda x, k: jsp.signal.convolve(x, k, mode="same", method="fft"))(chemical_fields, self.chemicals_diffusion_kernels)
 
 		agents = state.agents
 		agents_i, agents_j = agents.position.T
-		agents_alive_grid = jnp.zeros(self.size).at[agents_i, agents_j].set(1.)
+		agents_alive_grid = jnp.zeros(self.size).at[agents_i, agents_j].add(agents.alive)
 		agents_scent_field = jsp.signal.convolve(agents_alive_grid, self.agent_scent_diffusion_kernel, method="fft", mode="same")
 		
 		chemical_fields = jnp.concatenate([agents_scent_field[None], chemical_fields],axis=0)
 		chemical_fields = jnp.where(chemical_fields<self.chemical_detection_threshold, 0.0, chemical_fields) #C,H,W
 
-		padded_chemical_fields = jnp.pad(chemical_fields, [(0,0),(1,1),(1,1)])
-		agents_chemicals_inputs = jax.vmap(moore_neighborhood, in_axes=(None,0,0))(padded_chemical_fields, agents_i+1, agents_j+1)
+		fov = self.field_of_view
+		padded_chemical_fields = jnp.pad(chemical_fields, [(0,0),(fov,fov),(fov,fov)])
+		agents_chemicals_inputs = jax.vmap(partial(k_neighborhood, k=fov), in_axes=(None,0,0))(padded_chemical_fields, agents_i+fov, agents_j+fov)
 
 		agents_internal_inputs = jnp.concatenate([agents.energy[:,None], agents.reward[:,None]], axis=-1)
 
-		agents_walls_inputs = jax.vmap(moore_neighborhood, in_axes=(None,0,0))(self.walls[None], agents_i, agents_j)
+		agents_walls_inputs = jax.vmap(moore_neighborhood, in_axes=(None,0,0))(self.walls[None], agents_i, agents_j)[0]
 
 		return Observation(chemicals=agents_chemicals_inputs, internal=agents_internal_inputs, walls=agents_walls_inputs)
 
@@ -362,51 +374,79 @@ class GridWorld:
 
 	def _apply_actions(self, state: EnvState, actions: jax.Array)->EnvState:
 		"""
-		actions are: {0:N, 1:E, 2:S, 3:W, 4:eat, 5:none}
+		actions are: {0:N, 1:E, 2:S, 3:W, 4:none, 5:eat, 6:reproduce, 7: attack}
 		"""
-		action_effects = jnp.array([[1,0],[0,1], [-1,0], [0,-1], [0,0], [0,0]], dtype=i16)
+		no_move_actions = 1 + int(not self.passive_eating) + int(not self.passive_reproduction) + int(self.predation)
+
+		action_effects = jnp.array([[1,0],[0,1], [-1,0], [0,-1], *[[0,0] for _ in range(no_move_actions)]], dtype=i16)
+
 		agents = state.agents
-		actions = jnp.where(agents.alive, actions, 4)
+		actions = jnp.where(agents.alive, actions, -1)
+
+		# --- 1. Predation ---
+
+		if self.predation:
+			attacking = (actions == 7)&(agents.alive)
+			i, j = agents.position.T
+			on_attacking_cell = (jnp.zeros(self.size, dtype=jnp.bool).at[i,j].set(attacking))[i,j]
+			attacked = (~attacking) & (agents.alive) & (on_attacking_cell) 
+			successfull_attacks = attacking & (jnp.zeros(self.size, dtype=jnp.bool).at[i,j].set(attacked))[i,j]
+
+			agents_alive = jnp.where(attacked, False, agents.alive)
+			agents_energy = jnp.where(attacking, agents.energy-self.predation_energy_cost, agents.energy)
+			agents_energy = jnp.where(successfull_attacks, agents_energy+self.predation_energy_gain, agents_energy)
+			agents = agents._replace(energy=agents_energy, alive=agents_alive)
+
+		# --- 2. Move ---
 		agents_moves = action_effects[actions]
 		new_positions = agents.position+agents_moves
 		hits_wall = self.walls[*new_positions.T].astype(bool) #type:ignore
 		positions = jnp.where(hits_wall[:,None], agents.position, new_positions)
 		energy_loss = (actions < 4) * self.move_energy_cost + jnp.array(self.base_energy_loss, dtype=f16)
-		agents = agents._replace(position=positions, energy=agents.energy-energy_loss)
+		agents_energy = jnp.where(agents.alive, agents.energy-energy_loss, 0.0)
+		agents = agents._replace(position=positions, energy=agents_energy)
 
 		if self.deadly_walls:
 			agents = agents._replace(alive=agents.alive&(~hits_wall))
 
-		eating_agents = (actions==4)&(agents.alive)
+		# --- 3. Eat ---
+		# Agents can eat if:
+		# 	always if self.passive_eating is True
+		#	eating action (5) is taken
+
+		eating_agents = (actions==5)&(agents.alive) if not self.passive_eating else agents.alive
+		
 		food = state.food
 		agents_i, agents_j = agents.position.T
+		eating_agents_grid = jnp.zeros(self.size, dtype=i16).at[agents_i,agents_j].add(eating_agents) #nb of eating agents in each cell
+		energy_intake_grid = jnp.clip(eating_agents_grid, 0, jnp.sum(food*self.food_types.energy_concentration[:,None,None], axis=0)) #total qty of consumed energy in each cell
+		energy_intake_per_agent = jnp.where(eating_agents_grid>0, energy_intake_grid/eating_agents_grid, 0)
+		agents_energy_intake = energy_intake_per_agent[agents_i, agents_j]
+		agents_energy = agents.energy + agents_energy_intake
 
-		food_on_cell = food[:,agents_i,agents_j] # F,N
-		eating_agents_on_cell = (jnp.zeros(self.size, dtype=f16).at[agents_i, agents_j].add(eating_agents))[agents_i,agents_j] #N,
-		energy_on_cell = jnp.sum(food_on_cell * self.food_types.energy_concentration[:,None], axis=0) #N,
-		agents_reward = jnp.where(
-			eating_agents, 
-			energy_on_cell / jnp.clip(eating_agents_on_cell, 1), 
-			0.0
-		)
-		agents_energy = jnp.clip(agents.energy + agents_reward, -jnp.inf, self.max_energy)
-		
-		agents = agents._replace(reward=agents_reward, energy=agents_energy)
-		eating_agents_grid = jnp.zeros(self.size, dtype=bool).at[agents_i, agents_j].set(eating_agents)
-		food = jnp.where(eating_agents_grid[None], False, food)
+		agents = agents._replace(energy=agents_energy)
+		food = jnp.clip(food-eating_agents_grid[None], 0, self.food_types.max_concentration[:,None,None])
+
+		# --- 4. Reproduce ---
+		# agents reproduce if :
+		# 	reproduce action is taken if passive reproduction is false
+		#	Their energy level has been above threshold for enough time
+		# ---
+		reproduce = agents.alive & (actions==6) if not self.passive_reproduction else agents.alive
+		reproduce = reproduce & (agents.time_above_threshold > self.time_above_threshold_to_reproduce)
+		agents = agents._replace(reproduce=reproduce)
 
 		return state._replace(agents=agents, food=food)
-
 
 	# ====================== FOOD =========================
 
 	@property
 	def n_food_types(self):
-		return self.food_types.diffusion_rate.shape[0]
+		return self.food_types.reproduction_rate.shape[0]
 
 	def _init_food(self, key)->FoodMap:
-		food = jr.bernoulli(key, self.initial_food_density, (self.n_food_types, *self.size))
-		food = jnp.where(jnp.sum(food,axis=0)>1, False, food)
+		food = jr.bernoulli(key, self.initial_food_density[:,None,None], (self.n_food_types, *self.size)).astype(i16)
+		food = jnp.where(jnp.cumsum(jnp.pad(food,((1,0),(0,0),(0,0)))[:-1],axis=0)>0, 0, food)
 		return food
 
 	# ---
@@ -415,15 +455,11 @@ class GridWorld:
 		"""Do one step of food growth"""
 		food = state.food
 
-		# --- Reproduce ---
-		neighbors_count = jax.vmap(convolve, in_axes=(0,None))(food, jnp.array([[0,1,0],[1,0,1],[0,1,0]]))
-		p_grow = neighbors_count * self.food_types.reproduction_rate[:,None,None]
-		p_grow = p_grow + self.spontaneous_grow_prob
-		p_grow = jnp.where(neighbors_count>3, 0., p_grow)
-
-		grow = jr.bernoulli(key, p_grow) & (~jnp.any(food, axis=0, keepdims=True))#type:ignore
-
-		food = food | grow
+		# --- Grow ---
+		p_grow = jax.vmap(partial(jsp.signal.convolve2d, mode="same"))(food, self.food_growth_kernels)
+		grow = jr.bernoulli(key, p_grow).astype(i16)
+		grow = jnp.where(jnp.cumsum(jnp.pad(food,((1,0),(0,0),(0,0)))[:-1],axis=0)>0, 0, grow)
+		food = jnp.clip(food + grow, 0, self.food_types.max_concentration[:,None,None])
 
 		return state._replace(food=food)
 
@@ -445,6 +481,7 @@ class GridWorld:
 
 		img = jnp.ones((F,H,W,4)) * food_colors[:,None,None]
 		img = jnp.clip(jnp.where(food[...,None], img, 0.).sum(0), 0.0, 1.0) #type:ignore
+		img = img.at[:,:,-1].set((food/self.food_types.max_concentration.max()).sum(0))
 
 		ai, aj = agents.position[agents.alive].T
 		img = img.at[ai,aj].set(jnp.array([0.,0.,0.,1.]))
@@ -464,4 +501,10 @@ class GridWorld:
 			cam.snap()
 
 		return cam
+
+
+#=======================================================================
+#								SCENARIOS 
+#=======================================================================
+
 
