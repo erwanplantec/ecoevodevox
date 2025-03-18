@@ -117,8 +117,7 @@ def train(cfg: Config):
     _tsk = rx.GymnaxTask(cfg.env, fctry)
     def tsk(prms, key, data=None):
         fitness, data = _tsk(prms, key, data)
-
-        return fitness
+        return fitness, data
 
 
     mutation_mask = jax.tree.map(lambda x: jnp.ones_like(x), init_prms)
