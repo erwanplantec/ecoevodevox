@@ -107,7 +107,7 @@ class Model_E(CTRNNPolicy):
             zeta = jnp.zeros((n_types, n_fields)),
             omega = jnp.zeros((n_types, n_synaptic_markers)),
             theta = jnp.ones(n_types),
-            active = jnp.zeros(n_types),
+            active = jnp.zeros(n_types).at[0].set(1.),
             id_ = jnp.arange(n_types),
             s = jnp.zeros((n_types,sensory_dimensions)),
             m = jnp.zeros((n_types, motor_dimensions)),

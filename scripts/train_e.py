@@ -53,6 +53,7 @@ class Config(NamedTuple):
     p_duplicate: float=0.1
     sigma: float=0.1
     N0: int=8
+    init_cfg: str="single"
 
 
 def train(cfg: Config):
@@ -68,7 +69,10 @@ def train(cfg: Config):
     n_types = 8
     policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
     policy = Model_E(n_types, 8, dt=0.1, dvpt_time=10., policy_cfg=policy_cfg, key=random_key())
-    policy = make_two_types(policy, 8, 2)
+    if cfg.init_cfg=="single":
+        policy = make_single_type(policy, cfg.N0)
+    elif cfg.init_cfg=="two":
+        policy = make_two_types(policy, cfg.N0, 2)
 
     # ---
     # net = policy.initialize(random_key())
@@ -124,9 +128,6 @@ def train(cfg: Config):
     clip_max = params_shaper.flatten_single(clip_max)
     mutation_fn = lambda x, k, s: mutate(x, k, cfg.p_duplicate, s.sigma, mutation_mask, params_shaper, clip_min, clip_max, n_types) #type:ignore
 
-
-
-
     ga = GA(mutation_fn, prms, cfg.pop, elite_ratio=0.5, sigma_init=cfg.sigma, sigma_decay=1., sigma_limit=0.01, p_duplicate=cfg.p_duplicate)
 
     logger = rx.Logger(True, metrics_fn)
@@ -145,7 +146,6 @@ def train(cfg: Config):
     wandb.finish()
 
 if __name__ == '__main__':
-    jax.config.update("jax_debug_nans", True)
 
     cfg = Config(pop=256, gens=16, p_duplicate=0.01, sigma=0.01, N0=8)
     train(cfg)
