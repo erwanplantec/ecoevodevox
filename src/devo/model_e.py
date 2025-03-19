@@ -1,8 +1,5 @@
 from jax.flatten_util import ravel_pytree
-from numpy import sign
-from pydantic_core.core_schema import none_schema
 from ..eco.gridworld import Observation
-from ..utils.viz import render_network
 from .ctrnn import CTRNN, CTRNNPolicy, CTRNNPolicyConfig
 
 import jax
