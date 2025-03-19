@@ -88,10 +88,11 @@ class Model_E(CTRNNPolicy):
     dvpt_time: float
     temperature_decay: float
     migration_field: Callable
+    N_gain: float
     # ---
     def __init__(self, n_types: int, n_synaptic_markers: int, max_nodes_per_type: int=32, sensory_dimensions: int=1, 
                  motor_dimensions: int=1, dt: float=0.1, dvpt_time: float=10., temperature_decay: float=1., extra_migration_fields: int=3,
-                 policy_cfg: CTRNNPolicyConfig=dummy_policy_config, *, key: jax.Array):
+                 N_gain: float=10.0, policy_cfg: CTRNNPolicyConfig=dummy_policy_config, *, key: jax.Array):
 
         super().__init__(policy_cfg)
         
@@ -126,6 +127,7 @@ class Model_E(CTRNNPolicy):
         self.dt = dt
         self.dvpt_time = dvpt_time
         self.temperature_decay = temperature_decay
+        self.N_gain = N_gain
     # ---
     def initialize(self, key: jax.Array)->CTRNN:
         
@@ -134,7 +136,7 @@ class Model_E(CTRNNPolicy):
         node_type_ids = jnp.zeros(self.max_nodes)
         n_tot = 0
         pi = (self.types.pi*self.types.active) / jnp.sum(self.types.pi * self.types.active)
-        n = jnp.round(self.N * 10.0 * pi)
+        n = jnp.round(self.N * self.N_gain * pi)
         for _, (n, msk) in enumerate(zip(n, self.types.active)):
             node_type_ids = jnp.where(jnp.arange(self.max_nodes)<n_tot+n*msk, node_type_ids+1, node_type_ids)
             n_tot += n*msk

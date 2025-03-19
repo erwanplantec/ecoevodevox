@@ -54,6 +54,8 @@ class Config(NamedTuple):
     p_mut: float=1.0
     sigma: float=0.1
     N0: int=8
+    N_max: int=256
+    N_gain: float=10.0
     init_cfg: str="single"
 
 def train(cfg: Config):
@@ -68,7 +70,7 @@ def train(cfg: Config):
 
     n_types = 8
     policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
-    policy = Model_E(n_types, 8, dt=0.1, dvpt_time=10., policy_cfg=policy_cfg, key=random_key())
+    policy = Model_E(n_types, 8, max_nodes_per_type=cfg.N_max//8, dt=0.1, dvpt_time=10., policy_cfg=policy_cfg, N_gain=cfg.N_gain, key=random_key())
     if cfg.init_cfg=="single":
         policy = make_single_type(policy, cfg.N0)
     elif cfg.init_cfg=="two":
@@ -117,6 +119,8 @@ def train(cfg: Config):
     _tsk = rx.GymnaxTask(cfg.env, fctry)
     def tsk(prms, key, data=None):
         fitness, data = _tsk(prms, key, data)
+        net = jax.tree.map(lambda x:x[0], data["policy_states"])
+        D = jnp.linalg.norm(net.x[None] - net.x[:,None], axis=-1)
         return fitness, data
 
 
@@ -148,6 +152,8 @@ def train(cfg: Config):
     render_network(net, ax=ax)
     wandb.log({"best network": wandb.Image(fig)})
     wandb.finish()
+
+    return policy
 
 if __name__ == '__main__':
 
