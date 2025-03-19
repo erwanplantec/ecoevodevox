@@ -58,7 +58,7 @@ class GA(ex.Strategy):
         kselect, kmut, kcross = jr.split(key, 3)
         prms = state.archive
         selected = jr.choice(kselect, prms, (self.popsize,))
-        offsprings, _ = jax.vmap(self.mutation_fn, in_axes=(0,0,None))(selected, jr.split(kmut, self.popsize), state)
+        offsprings = jax.vmap(self.mutation_fn, in_axes=(0,0,None))(selected, jr.split(kmut, self.popsize), state)
         
         return offsprings, state
     # ---
