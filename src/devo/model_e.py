@@ -307,6 +307,21 @@ def duplicate_type(model, key):
     
     return model, jnn.one_hot(i, num_classes=types.psi.shape[0])
 
+def add_random_type(model, key=None):
+    active = model.types.active
+    k = active.sum().astype(int)
+    active = active.at[k].set(1.0)
+    return eqx.tree_at(lambda mdl: mdl.types.active, model, active)
+
+def remove_type(model, key):
+    active = model.types.active
+    K = active.sum().astype(int)
+    k = jr.choice(key, jnp.arange(active.shape[0]), p=active/active.sum())
+    active = active.at[k].set(0.0)
+    order = jnp.argsort(active, descending=True)
+    types = model.types._replace(active=active)
+    types = jax.tree.map(lambda x: x[order], types)
+    return eqx.tree_at(lambda t: t.types, types)
 
 def mutate(prms: jax.Array,
            key: jax.Array, 

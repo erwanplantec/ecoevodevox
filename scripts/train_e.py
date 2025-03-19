@@ -114,6 +114,7 @@ def train(cfg: Config):
         net = policy.initialize(jr.key(1))
         log_data["evaluation: network size"] = net.mask.sum()
         log_data["evaluation: active types"] = policy.types.active.sum()
+        log_data["evaluation: N"] = prms.N
         return log_data, ckpt_data, ep
         
     _tsk = rx.GymnaxTask(cfg.env, fctry)
