@@ -51,12 +51,20 @@ class Config(NamedTuple):
     log: bool=True
     elite_ratio: float=0.2
     p_duplicate: float=0.1
+    p_rm: float=0.0
+    p_add: float=0.0
     p_mut: float=1.0
     sigma: float=0.1
     N0: int=8
     N_max: int=256
     N_gain: float=10.0
     init_cfg: str="single"
+    T_dev: float=10.0
+    dt_dev: float=0.1
+    connection_penalty_coeff: float=0.0
+    neurons_penalty_coeff: float=0.0
+    sensor_penalty_coeff: float=0.0
+    motor_penalty_coeff: float=0.0
 
 def train(cfg: Config):
 
@@ -70,7 +78,7 @@ def train(cfg: Config):
 
     n_types = 8
     policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
-    policy = Model_E(n_types, 8, max_nodes_per_type=cfg.N_max//8, dt=0.1, dvpt_time=10., policy_cfg=policy_cfg, N_gain=cfg.N_gain, key=random_key())
+    policy = Model_E(n_types, 8, max_nodes_per_type=cfg.N_max//8, dt=cfg.dt_dev, dvpt_time=cfg.T_dev, policy_cfg=policy_cfg, N_gain=cfg.N_gain, key=random_key())
     if cfg.init_cfg=="single":
         policy = make_single_type(policy, cfg.N0)
     elif cfg.init_cfg=="two":
@@ -107,7 +115,7 @@ def train(cfg: Config):
         # eval
         x = state.archive[0]
         prms = params_shaper.reshape_single(x)
-        fs, _ = jax.vmap(tsk, in_axes=(None,0))(prms, jr.split(jr.key(1), 16))
+        fs, _ = jax.vmap(_tsk, in_axes=(None,0))(prms, jr.split(jr.key(1), 16))
         log_data["evaluation: avg fitness"] = fs.mean()
         log_data["evaluation: max_fitness"] = fs.max()
         policy = fctry(prms)
@@ -122,6 +130,24 @@ def train(cfg: Config):
         fitness, data = _tsk(prms, key, data)
         net = jax.tree.map(lambda x:x[0], data["policy_states"])
         D = jnp.linalg.norm(net.x[None] - net.x[:,None], axis=-1)
+        msk_conn = net.mask[None] * net.mask[:,None]
+        
+        connection_penalty = jnp.sum(D * jnp.abs(net.W) * msk_conn)
+        neurons_penalty = net.mask.sum()
+        sensor_penalty = jnp.abs(net.s*net.mask).sum()
+        motor_penalty = jnp.abs(net.m*net.mask).sum()
+
+        fitness = fitness                                       \
+            - connection_penalty * cfg.connection_penalty_coeff \
+            - neurons_penalty * cfg.neurons_penalty_coeff       \
+            - sensor_penalty * cfg.sensor_penalty_coeff         \
+            - motor_penalty * cfg.motor_penalty_coeff           \
+
+        data["connection_penalty"] = connection_penalty
+        data["neurons_penalty"] = neurons_penalty
+        data["sensor_penalty"] = sensor_penalty
+        data["motor_penalty"] = motor_penalty
+
         return fitness, data
 
 
@@ -135,7 +161,7 @@ def train(cfg: Config):
     clip_min = params_shaper.flatten_single(clip_min)
     clip_max = jax.tree.map(lambda x: jnp.full_like(x, jnp.inf), init_prms)
     clip_max = params_shaper.flatten_single(clip_max)
-    mutation_fn = lambda x, k, s: mutate(x, k, cfg.p_duplicate, cfg.p_mut, s.sigma, mutation_mask, params_shaper, clip_min, clip_max, n_types) #type:ignore
+    mutation_fn = lambda x, k, s: mutate(x, k, cfg.p_duplicate, cfg.p_mut, cfg.p_rm, cfg.p_add, s.sigma, params_shaper)
 
     ga = GA(mutation_fn, prms, cfg.pop, elite_ratio=cfg.elite_ratio, sigma_init=cfg.sigma, sigma_decay=1., sigma_limit=0.01, p_duplicate=cfg.p_duplicate)
 

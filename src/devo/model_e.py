@@ -1,4 +1,6 @@
+from jax.flatten_util import ravel_pytree
 from numpy import sign
+from pydantic_core.core_schema import none_schema
 from ..eco.gridworld import Observation
 from ..utils.viz import render_network
 from .ctrnn import CTRNN, CTRNNPolicy, CTRNNPolicyConfig
@@ -47,16 +49,18 @@ def safe_norm(x):
     return x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + 1e-8)
 
 def migration_step(xs, t, psis, gammas, zetas, mask, thetas, dt=0.01, temperature_decay=0.98, 
-    migration_field=migration_field, *, key):
+    migration_field=migration_field, T_interactions=0.0, *, key):
     
     N, _ = xs.shape
     T = temperature_decay ** t
+    k = jnn.sigmoid((t - T_interactions)*10.0)
+    mask = mask * jnn.sigmoid((t-thetas)*10.0)
 
     M = migration_field
     def M_(x):
         """Modified molecular field"""
         d = jnp.sum(jnp.square(x[None]-xs), axis=-1, keepdims=True) #N,1
-        return M(x) + jnp.sum(zetas * jnp.exp(-d/(gammas+1e-6)) * mask[:,None], axis=0)
+        return M(x) + k*jnp.sum(zetas * jnp.exp(-d/(gammas+1e-6)) * mask[:,None], axis=0)
 
     def E(x, psi):
         """energy field"""
@@ -65,6 +69,7 @@ def migration_step(xs, t, psis, gammas, zetas, mask, thetas, dt=0.01, temperatur
     dx = - jax.vmap(jax.grad(E))(xs, psis)
     dx_norm = jnp.linalg.norm(dx, axis=-1, keepdims=True)
     dx = jnp.where(dx_norm>0, dx/dx_norm, dx)
+    dx = dx * mask[:,None]
 
     xs = jnp.clip(xs + dt * T * dx, -1., 1.)
     
@@ -78,7 +83,6 @@ dummy_policy_config = CTRNNPolicyConfig(lambda x:x, lambda x:x)
 class Model_E(CTRNNPolicy):
     # --- params ---
     types: NeuronType
-    N: jax.Array
     O: jax.Array
     A: nn.MLP
     # --- statics ---
@@ -120,7 +124,6 @@ class Model_E(CTRNNPolicy):
         self.types = types
         self.O = jr.normal(k1, (n_synaptic_markers,)*2) * 0.1
         self.A = nn.MLP(n_synaptic_markers+n_fields, n_synaptic_markers, 16, 1, key=k2)
-        self.N = jnp.ones(())
         
         self.n_types = n_types
         self.max_nodes = max_nodes_per_type * n_types
@@ -135,8 +138,8 @@ class Model_E(CTRNNPolicy):
         x0 = jr.normal(key, (self.max_nodes, 2)) * 0.01
         node_type_ids = jnp.zeros(self.max_nodes)
         n_tot = 0
-        pi = (self.types.pi*self.types.active) / jnp.sum(self.types.pi * self.types.active)
-        n = jnp.round(self.N * self.N_gain * pi)
+        pi = self.types.pi*self.types.active
+        n = jnp.round(pi * self.N_gain)
         for _, (n, msk) in enumerate(zip(n, self.types.active)):
             node_type_ids = jnp.where(jnp.arange(self.max_nodes)<n_tot+n*msk, node_type_ids+1, node_type_ids)
             n_tot += n*msk
@@ -216,7 +219,7 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
     types = mdl.types
     types = jax.tree.map(lambda x, y: x.at[0].set(y), types, sensory_type)
     types = jax.tree.map(lambda x, y: x.at[1].set(y), types, motor_type)
-    mdl = eqx.tree_at(lambda x: [x.types, x.N], mdl, [types, jnp.array(n_total/mdl.N_gain)])
+    mdl = eqx.tree_at(lambda x: [x.types], mdl, [types])
     return mdl
 
 def make_single_type(mdl, n_neurons):
@@ -239,7 +242,7 @@ def make_single_type(mdl, n_neurons):
     
     types = mdl.types
     types = jax.tree.map(lambda x, y: x.at[0].set(y), types, sensorimotor_type)
-    mdl = eqx.tree_at(lambda x: [x.types,x.N], mdl, [types,jnp.array(n_neurons/mdl.N_gain)])
+    mdl = eqx.tree_at(lambda x: [x.types], mdl, [types])
     return mdl
 
 # ========================= INTERFACE =============================
@@ -321,42 +324,104 @@ def remove_type(model, key):
     order = jnp.argsort(active, descending=True)
     types = model.types._replace(active=active)
     types = jax.tree.map(lambda x: x[order], types)
-    return eqx.tree_at(lambda t: t.types, types)
+    return eqx.tree_at(lambda t: t.types, model, types)
+
+min_prms = lambda prms_like: eqx.tree_at(
+    lambda tree: [
+        tree.types.theta, 
+        tree.types.pi,
+        tree.types.gamma
+    ],
+    jax.tree.map(lambda x: jnp.full_like(x, -jnp.inf), prms_like),
+    [
+        jnp.zeros_like(prms_like.types.theta),
+        jnp.zeros_like(prms_like.types.pi),
+        jnp.full_like(prms_like.types.gamma, 1e-8)
+    ]
+)
+
+max_prms = lambda prms_like: jax.tree.map(lambda x:jnp.full_like(x, jnp.inf), prms_like)
+
+mask_prms = lambda prms_like: eqx.tree_at(
+    lambda tree: [tree.types.id_, tree.types.active],
+    jax.tree_map(lambda x: jnp.ones_like(x), prms_like),
+    [jnp.zeros_like(prms_like.types.id_), jnp.zeros_like(prms_like.types.active)]
+)
 
 def mutate(prms: jax.Array,
            key: jax.Array, 
            p_duplicate: float, 
-           mut_proba: float,
+           p_mut: float,
+           p_rm: float,
+           p_add: float,
            sigma_mut: float, 
-           mutation_mask: jax.Array, 
            shaper: ex.ParameterReshaper, 
-           clip_min: jax.Array, 
-           clip_max: jax.Array, 
-           n_types: int):
+           mutation_mask: jax.Array|None=None, 
+           clip_min: jax.Array|None=None, 
+           clip_max: jax.Array|None=None):
 
+    # ---
+    prms_shaped = shaper.reshape_single(prms)
+    if clip_min is None:
+        clip_min, _ = ravel_pytree(min_prms(prms_shaped))
+    if clip_max is None:
+        clip_max, _ = ravel_pytree(max_prms(prms_shaped))
+    if mutation_mask is None:
+        mutation_mask, _ = ravel_pytree(mask_prms(prms_shaped))
+    # ---
+    
     def _duplicate(prms, key):
-        mdl = shaper.reshape_single(prms)
-        mdl, dupl = duplicate_type(mdl, key)
-        prms = shaper.flatten_single(mdl)
-        return prms, dupl
+        prms, _ = duplicate_type(prms, key)
+        return prms
+
+    def _rm(prms, key):
+        return remove_type(prms, key)
+
+    def _add(prms, key):
+        return add_random_type(prms, key)
+        
 
     def _mutate(prms, key):
         k1, k2 = jr.split(key)
-        mut_locs = jr.bernoulli(k1, mut_proba, prms.shape).astype(float)
+        mut_locs = jr.bernoulli(k1, p_mut, prms.shape).astype(float)
         epsilon = jr.normal(k2, prms.shape) * sigma_mut * mutation_mask * mut_locs 
         prms = prms + epsilon
         prms = jnp.clip(prms, clip_min, clip_max)
         return prms
 
-    k1, k2 = jr.split(key)
-    prms, duplicated = jax.lax.cond(
+
+    key, k1, k2 = jr.split(key, 3)
+
+    prms_shaped = jax.lax.cond(
         jr.uniform(k1)<p_duplicate,
         lambda prms, key: _duplicate(prms, key),
-        lambda prms, key: (_mutate(prms, key), jnp.zeros(n_types,)),
-        prms, k2
+        lambda prms, key: prms,
+        prms_shaped, k2
     )
+
+    key, k1, k2 = jr.split(key, 3)
+
+    prms_shaped = jax.lax.cond(
+        jr.uniform(k1)<p_rm,
+        lambda prms, key: _rm(prms, key),
+        lambda prms, key: prms,
+        prms_shaped, k2
+    )
+
+    key, k1, k2 = jr.split(key, 3)
+
+    prms_shaped = jax.lax.cond(
+        jr.uniform(k1)<p_add,
+        lambda prms, key: _add(prms, key),
+        lambda prms, key: prms,
+        prms_shaped, k2
+    )
+
+
+    prms = shaper.flatten_single(prms_shaped) #type:ignore
+    prms = _mutate(prms, key)
     
-    return prms, duplicated
+    return prms
 
 
 if __name__ == '__main__':
