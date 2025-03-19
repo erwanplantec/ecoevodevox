@@ -120,7 +120,7 @@ class Model_E(CTRNNPolicy):
         self.types = types
         self.O = jr.normal(k1, (n_synaptic_markers,)*2) * 0.1
         self.A = nn.MLP(n_synaptic_markers+n_fields, n_synaptic_markers, 16, 1, key=k2)
-        self.N = jnp.zeros(())
+        self.N = jnp.ones(())
         
         self.n_types = n_types
         self.max_nodes = max_nodes_per_type * n_types
@@ -216,7 +216,7 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
     types = mdl.types
     types = jax.tree.map(lambda x, y: x.at[0].set(y), types, sensory_type)
     types = jax.tree.map(lambda x, y: x.at[1].set(y), types, motor_type)
-    mdl = eqx.tree_at(lambda x: [x.types, x.N], mdl, [types, n_total/10.])
+    mdl = eqx.tree_at(lambda x: [x.types, x.N], mdl, [types, n_total/mdl.N_gain])
     return mdl
 
 def make_single_type(mdl, n_neurons):
@@ -239,7 +239,7 @@ def make_single_type(mdl, n_neurons):
     
     types = mdl.types
     types = jax.tree.map(lambda x, y: x.at[0].set(y), types, sensorimotor_type)
-    mdl = eqx.tree_at(lambda x: [x.types,x.N], mdl, [types,n_neurons/10.])
+    mdl = eqx.tree_at(lambda x: [x.types,x.N], mdl, [types,n_neurons/mdl.N_gain])
     return mdl
 
 # ========================= INTERFACE =============================
