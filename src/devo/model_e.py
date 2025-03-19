@@ -216,7 +216,7 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
     types = mdl.types
     types = jax.tree.map(lambda x, y: x.at[0].set(y), types, sensory_type)
     types = jax.tree.map(lambda x, y: x.at[1].set(y), types, motor_type)
-    mdl = eqx.tree_at(lambda x: [x.types, x.N], mdl, [types, n_total/mdl.N_gain])
+    mdl = eqx.tree_at(lambda x: [x.types, x.N], mdl, [types, jnp.array(n_total/mdl.N_gain)])
     return mdl
 
 def make_single_type(mdl, n_neurons):
@@ -239,7 +239,7 @@ def make_single_type(mdl, n_neurons):
     
     types = mdl.types
     types = jax.tree.map(lambda x, y: x.at[0].set(y), types, sensorimotor_type)
-    mdl = eqx.tree_at(lambda x: [x.types,x.N], mdl, [types,n_neurons/mdl.N_gain])
+    mdl = eqx.tree_at(lambda x: [x.types,x.N], mdl, [types,jnp.array(n_neurons/mdl.N_gain)])
     return mdl
 
 # ========================= INTERFACE =============================

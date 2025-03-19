@@ -96,6 +96,9 @@ def train(cfg: Config):
     fctry = lambda prms: eqx.combine(prms, sttcs)
     params_shaper = ex.ParameterReshaper(prms, verbose=False)
 
+    print(prms.N)
+    exit()
+
     def metrics_fn(state, data):
         log_data, ckpt_data, ep = rx.default_es_metrics(state, data)
         policy_states = data["eval_data"]["policy_states"] # P, T, ...
