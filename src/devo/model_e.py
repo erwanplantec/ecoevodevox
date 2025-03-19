@@ -182,7 +182,7 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
     n_synaptic_markers = mdl.types.omega.shape[-1]
     n_total = n_sensory_neurons + n_motor_neurons
     sensory_type = NeuronType(
-        pi = n_sensory_neurons/n_total, 
+        pi = n_sensory_neurons/mdl.N_gain, 
         id_ = 0,
         psi = jnp.array([0.,-1.,0., 0., 0., 1., 0., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0.05, 0., 0.]),
@@ -198,7 +198,7 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
     )
     
     motor_type = NeuronType(
-        pi = n_motor_neurons/n_total,
+        pi = n_motor_neurons/mdl.N_gain,
         id_ = 1,
         psi = jnp.array([0.,1.,0., 0., 0., 0., 1., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0., 0.08, 0.]),
@@ -222,7 +222,7 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
 def make_single_type(mdl, n_neurons):
     n_synaptic_markers = mdl.types.omega.shape[-1]
     sensorimotor_type = NeuronType(
-        pi = 1., 
+        pi = n_neurons/mdl.N_gain, 
         id_ = 0,
         psi = jnp.array([0.,0.,0., 0., 0., 1., 0., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0.1, 0., 0.]),

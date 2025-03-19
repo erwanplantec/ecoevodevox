@@ -125,6 +125,7 @@ def train(cfg: Config):
         return log_data, ckpt_data, ep
         
     _tsk = rx.GymnaxTask(cfg.env, fctry)
+    
     def tsk(prms, key, data=None):
         fitness, data = _tsk(prms, key, data)
         net = jax.tree.map(lambda x:x[0], data["policy_states"])
