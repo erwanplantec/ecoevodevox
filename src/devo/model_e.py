@@ -287,10 +287,11 @@ def gridworld_motor_interface(ctrnn: CTRNN, threshold_to_move: float=1.0):
 def duplicate_type(model, key):
     k1, k2 = jr.split(key)
     types = model.types
+    n_types = model.types.pi.shape[0]
     k = model.types.active.sum().astype(int)
     p = jnp.arange(types.psi.shape[0])<k
     p = p / p.sum()
-    i = jr.choice(k1, jnp.arange(types.psi.shape[0]), p=p)
+    i = jr.choice(k1, jnp.arange(n_types), p=p)
     
     copied_type = jax.tree.map(lambda x:x[i], types)
     types = jax.tree.map(lambda t, ct: t.at[k].set(ct), types, copied_type)
@@ -302,7 +303,7 @@ def duplicate_type(model, key):
     pi = pi.at[i].set(pi_i)
     types = eqx.tree_at(lambda types: types.pi, types, pi)
     
-    types = eqx.tree_at(lambda types: types.id_, types, types.id_.at[k].set(k))
+    types = eqx.tree_at(lambda types: types.id_, types, jnp.arange(n_types))
     model = eqx.tree_at(lambda m: m.types, model, types)
     
     return model, jnn.one_hot(i, num_classes=types.psi.shape[0])
