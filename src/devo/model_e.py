@@ -103,7 +103,7 @@ class Model_E(CTRNNPolicy):
         self.migration_field = lambda x: jnp.concatenate([migration_field(x),jnp.zeros(extra_migration_fields)])
         
         types = NeuronType(
-            pi = jnp.zeros(n_types, dtype=jnp.float16),
+            pi = jnp.zeros(n_types),
             psi = jnp.zeros((n_types, n_fields)),
             gamma = jnp.zeros((n_types, n_fields))+0.001,
             zeta = jnp.zeros((n_types, n_fields)),
@@ -136,8 +136,8 @@ class Model_E(CTRNNPolicy):
         node_type_ids = jnp.zeros(self.max_nodes)
         n_tot = 0
         pi = self.types.pi*self.types.active
-        n = jnp.round(pi * self.N_gain)
-        for _, (n, msk) in enumerate(zip(n, self.types.active)):
+        ns = jnp.round(pi * self.N_gain)
+        for _, (n, msk) in enumerate(zip(ns, self.types.active)):
             node_type_ids = jnp.where(jnp.arange(self.max_nodes)<n_tot+n*msk, node_type_ids+1, node_type_ids)
             n_tot += n*msk
         node_type_ids = self.n_types - node_type_ids
