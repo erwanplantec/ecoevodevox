@@ -106,11 +106,9 @@ def train(cfg: Config):
 
     def metrics_fn(state, data):
         log_data, ckpt_data, ep = rx.default_es_metrics(state, data)
-        policy_states = data["eval_data"]["policy_states"] # P, T, ...
         archive = state.archive
         prms = params_shaper.reshape(archive)
         log_data["active types"] = prms.types.active.sum(-1) #type:ignore
-        log_data["network sizes"] = policy_states.mask[:,-1].sum(-1)
         log_data["archive fitnesses"] = state.fitness
         # eval
         x = state.archive[0]
@@ -125,7 +123,7 @@ def train(cfg: Config):
         return log_data, ckpt_data, ep
         
     _tsk = rx.GymnaxTask(cfg.env, fctry)
-    
+
     def tsk(prms, key, data=None):
         fitness, data = _tsk(prms, key, data)
         net = jax.tree.map(lambda x:x[0], data["policy_states"])
