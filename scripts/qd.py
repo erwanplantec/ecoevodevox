@@ -169,7 +169,7 @@ def train(cfg: Config, key: jax.Array):
 	x_init = prms_shaper.flatten_single(prms)
 	init_genotypes = jax.vmap(_mutation_fn, in_axes=(None,0))(x_init,jr.split(k_init, cfg.batch_size)) #type:ignore
 	init_fitnesses, init_bds, _ = trainer.eval(init_genotypes, k_eval, None)
-	repertoire = MapElitesRepertoire(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
+	repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	emitter_state, _ = trainer.emitter.init(k_emit, repertoire, init_genotypes, init_fitnesses, init_bds, None)
 	init_state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
 	
