@@ -158,23 +158,6 @@ def train(cfg: Config, key: jax.Array):
 	#-------------------------------------------------------------------
 	#-------------------------------------------------------------------
 
-	def plot_results(repertoire, ax):
-		fitnesses = repertoire.fitnesses
-		genotypes = repertoire.genotypes
-		mask = ~np.isinf(fitnesses)
-		prms: PyTree = prms_shaper.reshape(genotypes)
-		active_types = prms.types.active.sum(-1)
-		network_size = np.sum(prms.types.active * prms.types.pi * cfg.N_gain, axis=-1)
-
-		plot_2d_map_elites_repertoire(trainer.centroids, fitnesses, minval=0.0, maxval=1.0, ax=ax[0]) #type:ignore
-		ax[0].set_title("fitness")
-		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, active_types, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[1])
-		ax[1].set_title("#types")
-		ax[1].set_ylabel("")
-		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[2])
-		ax[2].set_title("N")
-		ax[2].set_ylabel("")
-
 	def metrics_fn(state, data):
 
 		repertoire = state.repertoire
@@ -191,7 +174,7 @@ def train(cfg: Config, key: jax.Array):
 			avg_active_types=jnp.sum(jnp.where(mask, prms.types.active.sum(-1), 0.0)) / mask.sum(), #type:ignore
 			active_types=jnp.where(mask, prms.types.active.sum(-1), 0.0), #type:ignore
 			max_active_types = prms.types.active.sum(-1).max(), #type:ignore
-			avg_network_size = jnp.where(mask, jnp.sum(prms.types.active*prms.types.pi*cfg.N_gain, axis=-1), 0.0)/mask.sum(), #type:ignore
+			network_size = jnp.sum(jnp.where(mask, jnp.sum(prms.types.active*prms.types.pi*cfg.N_gain, axis=-1), 0.0)), #type:ignore
 		)
 
 		return log_data, None, 0
@@ -228,8 +211,27 @@ def train(cfg: Config, key: jax.Array):
 
 	fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
 	cam = Camera(fig)
+	max_fitness = max([r.fitnesses.max() for r in repertoires])
+	min_fitness = min([np.where(np.isinf(r.fitnesses), np.inf, r.fitnesses).min() for r in repertoires])
+	max_types = max([np.max(prms_shaper.reshape(r.genotypes).types.active.sum(-1)) for r in repertoires])
+	min_types = 0
 	for repertoire in repertoires:
-		plot_results(repertoire, ax)
+		fitnesses = repertoire.fitnesses
+		genotypes = repertoire.genotypes
+		mask = ~np.isinf(fitnesses)
+		prms: PyTree = prms_shaper.reshape(genotypes)
+		active_types = prms.types.active.sum(-1)
+		network_size = np.sum(prms.types.active * prms.types.pi * cfg.N_gain, axis=-1)
+
+		plot_2d_map_elites_repertoire(trainer.centroids, fitnesses, minval=0.0, maxval=1.0, ax=ax[0], vmin=min_fitness, vmax=max_fitness) #type:ignore
+		ax[0].set_title("fitness")
+		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, active_types, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[1], vmin=min_types, vmax=max_types)
+		ax[1].set_title("#types")
+		ax[1].set_ylabel("")
+		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[2])
+		ax[2].set_title("N")
+		ax[2].set_ylabel("")
+
 		cam.snap()
 	ani = cam.animate()
 	wandb.log({"result": wandb.Html(ani.to_html5_video())})
