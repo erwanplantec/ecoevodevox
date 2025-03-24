@@ -1,13 +1,18 @@
 from functools import partial
 from jax.flatten_util import ravel_pytree
+from jaxtyping import PyTree
 import realax as rx
 import evosax as ex
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import jax.nn as jnn
+import numpy as np
 import equinox as eqx
+import matplotlib
+matplotlib.use('agg')
 import matplotlib.pyplot as plt
+from celluloid import Camera
 import wandb
 
 from qdax.core.emitters.standard_emitters import MixingEmitter
@@ -26,6 +31,7 @@ class Config(NamedTuple):
 	gens: int=256
 	batch_size: int=256
 	grid_shape: tuple=(32,32)
+	plot_freq: int=100
 	# --- robot ---
 	lasers: int=32
 	sensor_neurons_min_norm: float=0.8
@@ -94,7 +100,6 @@ def train(cfg: Config, key: jax.Array):
 		return action
 
 
-
 	policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
 	model = Model_E(cfg.max_types, cfg.synaptic_markers, cfg.max_nodes, 
 		sensory_dimensions=2, motor_dimensions=1, temperature_decay=0.98, 
@@ -149,8 +154,29 @@ def train(cfg: Config, key: jax.Array):
 		bd = jnp.array([final_pos.x, final_pos.y])
 		return fitness, bd, data
 
+	#-------------------------------------------------------------------
+	#-------------------------------------------------------------------
+	#-------------------------------------------------------------------
+
+	def plot_results(repertoire, ax):
+		fitnesses = repertoire.fitnesses
+		genotypes = repertoire.genotypes
+		mask = ~np.isinf(fitnesses)
+		prms: PyTree = prms_shaper.reshape(genotypes)
+		active_types = prms.types.active.sum(-1)
+		network_size = np.sum(prms.types.active * prms.types.pi * cfg.N_gain, axis=-1)
+
+		plot_2d_map_elites_repertoire(trainer.centroids, fitnesses, minval=0.0, maxval=1.0, ax=ax[0]) #type:ignore
+		ax[0].set_title("fitness")
+		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, active_types, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[1])
+		ax[1].set_title("#types")
+		ax[1].set_ylabel("")
+		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[2])
+		ax[2].set_title("N")
+		ax[2].set_ylabel("")
+
 	def metrics_fn(state, data):
-		
+
 		repertoire = state.repertoire
 		genotypes = repertoire.genotypes
 		mask = ~jnp.isinf(repertoire.fitnesses)
@@ -158,18 +184,30 @@ def train(cfg: Config, key: jax.Array):
 		prms = prms_shaper.reshape(genotypes)
 
 		log_data = dict(
+			result=repertoire,
 			coverage = jnp.where(mask, 1.0, 0.0).mean(),
 			max_fitness = jnp.max(repertoire.fitnesses),
 			qd = jnp.sum(jnp.where(mask, repertoire.fitnesses, 0.0)), #type:ignore
 			avg_active_types=jnp.sum(jnp.where(mask, prms.types.active.sum(-1), 0.0)) / mask.sum(), #type:ignore
 			active_types=jnp.where(mask, prms.types.active.sum(-1), 0.0), #type:ignore
 			max_active_types = prms.types.active.sum(-1).max(), #type:ignore
-			avg_network_size = jnp.where(mask, jnp.sum(prms.types.active*prms.types.pi*cfg.N_gain, axis=-1), 0.0)/mask.sum(),
+			avg_network_size = jnp.where(mask, jnp.sum(prms.types.active*prms.types.pi*cfg.N_gain, axis=-1), 0.0)/mask.sum(), #type:ignore
 		)
 
 		return log_data, None, 0
 
-	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn)
+	repertoires = []
+	generations = []
+	counter = [0]
+
+	def host_transform(data):
+		counter[0] += 1
+		if not counter[0]%cfg.plot_freq:
+			generations.append(counter[0])
+			repertoires.append(jax.tree.map(lambda x: np.asarray(x), data["result"]))
+		del data["result"]
+		return data
+	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)
 
 	trainer = rx.QDTrainer(emitter, task, cfg.gens, params_like=prms, bd_minval=0.0, bd_maxval=1.0, grid_shape=cfg.grid_shape, logger=logger) 
 	
@@ -187,17 +225,22 @@ def train(cfg: Config, key: jax.Array):
 	
 	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
 	state = jax.block_until_ready(trainer.train_(init_state, key_train))
+
+	fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
+	cam = Camera(fig)
+	for repertoire in repertoires:
+		plot_results(repertoire, ax)
+		cam.snap()
+	ani = cam.animate()
+	wandb.log({"result": wandb.Html(ani.to_html5_video())})
+
 	if cfg.log: wandb.finish()
-
-	plot_2d_map_elites_repertoire(trainer.centroids, state.repertoire.fitnesses, minval=0.0, maxval=1.0) #type:ignore
-
-	plt.show()
 
 	return state
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=32, gens=16, N_gain=100, p_duplicate=0.01, variation_percentage=0.1)
+	cfg = Config(batch_size=8, gens=16, N_gain=100, p_duplicate=0.01, variation_percentage=0.1, plot_freq=5)
 	train(cfg, jr.key(1))
 
 
