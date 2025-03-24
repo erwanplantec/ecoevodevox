@@ -150,6 +150,7 @@ def train(cfg: Config, key: jax.Array):
 		return fitness, bd, data
 
 	def metrics_fn(state, data):
+		
 		repertoire = state.repertoire
 		genotypes = repertoire.genotypes
 		mask = ~jnp.isinf(repertoire.fitnesses)
@@ -163,6 +164,7 @@ def train(cfg: Config, key: jax.Array):
 			avg_active_types=jnp.sum(jnp.where(mask, prms.types.active.sum(-1), 0.0)) / mask.sum(), #type:ignore
 			active_types=jnp.where(mask, prms.types.active.sum(-1), 0.0), #type:ignore
 			max_active_types = prms.types.active.sum(-1).max(), #type:ignore
+			avg_network_size = jnp.where(mask, jnp.sum(prms.types.active*prms.types.pi*cfg.N_gain, axis=-1), 0.0)/mask.sum(),
 		)
 
 		return log_data, None, 0
