@@ -8,6 +8,7 @@ import jax.random as jr
 import jax.nn as jnn
 import equinox as eqx
 import matplotlib.pyplot as plt
+import wandb
 
 from qdax.core.emitters.standard_emitters import MixingEmitter
 from qdax.core.emitters.mutation_operators import isoline_variation
@@ -23,6 +24,7 @@ class Config(NamedTuple):
 	# --- training ---
 	gens: int=256
 	batch_size: int=256
+	grid_shape: tuple=(32,32)
 	# --- robot ---
 	lasers: int=32
 	sensor_neurons_min_norm: float=0.8
@@ -93,7 +95,7 @@ def train(cfg: Config, key: jax.Array):
 	policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
 	model = Model_E(cfg.max_types, cfg.synaptic_markers, cfg.max_nodes, 
 		sensory_dimensions=2, motor_dimensions=1, temperature_decay=0.98, 
-		extra_migration_fields=3, N_gain=cfg.N_gain, body_shape="circle", policy_cfg=policy_cfg,
+		extra_migration_fields=3, N_gain=cfg.N_gain, body_shape="square", policy_cfg=policy_cfg,
 		key=key_mdl)
 	model = make_single_type(model, 8)
 	
@@ -144,7 +146,20 @@ def train(cfg: Config, key: jax.Array):
 		bd = jnp.array([final_pos.x, final_pos.y])
 		return fitness, bd, data
 
-	trainer = rx.QDTrainer(emitter, task, cfg.gens, params_like=prms, bd_minval=0.0, bd_maxval=1.0, grid_shape=(64,64)) 
+	def metrics_fn(state, data):
+		repertoire = state.repertoire
+
+		log_data = dict(
+			coverage = jnp.where(jnp.isinf(repertoire.fitnesses), 0.0, 1.0).mean(),
+			max_fitness = jnp.max(repertoire.fitnesses),
+			qd = jnp.sum(jnp.where(jnp.isinf(repertoire.fitnesses), 0.0, repertoire.fitnesses)) #type:ignore
+		)
+
+		return log_data, None, 0
+
+	logger = rx.Logger(True, metrics_fn=metrics_fn)
+
+	trainer = rx.QDTrainer(emitter, task, cfg.gens, params_like=prms, bd_minval=0.0, bd_maxval=1.0, grid_shape=cfg.grid_shape, logger=logger) 
 	
 	#-------------------------------------------------------------------
 	#-------------------------------------------------------------------
@@ -158,15 +173,19 @@ def train(cfg: Config, key: jax.Array):
 	emitter_state, _ = trainer.emitter.init(k_emit, repertoire, init_genotypes, init_fitnesses, init_bds, None)
 	init_state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
 	
-	state = trainer.train_(init_state, key_train)
+	wandb.init(project="eedx_qd", config=cfg._asdict())
+	state = jax.block_until_ready(trainer.train_(init_state, key_train))
+	wandb.finish()
 
-	plot_2d_map_elites_repertoire(trainer.centroids, state.repertoire.fitnesses, minval=0.0, maxval=1.0, repertoire_descriptors=state.repertoire.descriptors)
+	plot_2d_map_elites_repertoire(trainer.centroids, state.repertoire.fitnesses, minval=0.0, maxval=1.0)
 
 	plt.show()
 
+	return state
+
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=256, gens=128, N_gain=100, p_duplicate=0.01, variation_percentage=0.1)
+	cfg = Config(batch_size=32, gens=128, N_gain=100, p_duplicate=0.01, variation_percentage=0.1)
 	train(cfg, jr.key(1))
 
 
