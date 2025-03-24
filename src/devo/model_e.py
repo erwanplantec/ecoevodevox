@@ -11,7 +11,7 @@ import equinox.nn as nn
 import evosax as ex
 
 from typing import Callable, NamedTuple
-from jaxtyping import Float, Int
+from jaxtyping import Float, Int, PyTree
 
 
 class NeuronType(NamedTuple):
@@ -46,7 +46,7 @@ def safe_norm(x):
     return x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + 1e-8)
 
 def migration_step(xs, t, psis, gammas, zetas, mask, thetas, dt=0.01, temperature_decay=0.98, 
-    migration_field=migration_field, T_interactions=0.0, *, key):
+    migration_field=migration_field, T_interactions=0.0, shape: str="square", *, key):
     
     N, _ = xs.shape
     T = temperature_decay ** t
@@ -68,11 +68,30 @@ def migration_step(xs, t, psis, gammas, zetas, mask, thetas, dt=0.01, temperatur
     dx = jnp.where(dx_norm>0, dx/dx_norm, dx)
     dx = dx * mask[:,None]
 
-    xs = jnp.clip(xs + dt * T * dx, -1., 1.)
+    if shape=="square":
+        xs = jnp.clip(xs + dt * T * dx, -1., 1.)
+    elif shape=="circle":
+        norms = jnp.linalg.norm(xs, axis=-1, keepdims=True)
+        xs = jnp.where(norms>1.0, xs/norms, xs)
+    else:
+        raise ValueError(f"shape {shape} is not valid. Must be either 'circle' or 'square'")
     
     return xs
 
 # ======================================================
+
+class XOXT(eqx.Module):
+    O: jax.Array
+    def __init__(self, dims, key):
+        self.O = jnp.zeros((dims,dims))
+    def __call__(self, x_pre, x_post):
+        return x_pre @ self.O @ x_post
+
+class MLPConn(nn.MLP):
+    def __init__(self, dims, key):
+        super().__init__(dims*2, "scalar", 16, 1, key=key)
+    def __call__(self, x_pre, x_post): #type:ignore
+        return super().__call__(jnp.concatenate([x_pre,x_post]))
 
 
 dummy_policy_config = CTRNNPolicyConfig(lambda x:x, lambda x:x)
@@ -80,7 +99,7 @@ dummy_policy_config = CTRNNPolicyConfig(lambda x:x, lambda x:x)
 class Model_E(CTRNNPolicy):
     # --- params ---
     types: NeuronType
-    O: jax.Array
+    connection_model: PyTree
     A: nn.MLP
     # --- statics ---
     n_types: int
@@ -90,10 +109,11 @@ class Model_E(CTRNNPolicy):
     temperature_decay: float
     migration_field: Callable
     N_gain: float
+    body_shape: str
     # ---
-    def __init__(self, n_types: int, n_synaptic_markers: int, max_nodes_per_type: int=32, sensory_dimensions: int=1, 
+    def __init__(self, n_types: int, n_synaptic_markers: int, max_nodes: int=32, sensory_dimensions: int=1, 
                  motor_dimensions: int=1, dt: float=0.1, dvpt_time: float=10., temperature_decay: float=1., extra_migration_fields: int=3,
-                 N_gain: float=10.0, policy_cfg: CTRNNPolicyConfig=dummy_policy_config, *, key: jax.Array):
+                 N_gain: float=10.0, policy_cfg: CTRNNPolicyConfig=dummy_policy_config, body_shape: str="square", connection_model: str="xoxt", *, key: jax.Array):
 
         super().__init__(policy_cfg)
         
@@ -119,15 +139,22 @@ class Model_E(CTRNNPolicy):
         )
         
         self.types = types
-        self.O = jr.normal(k1, (n_synaptic_markers,)*2) * 0.1
+        if connection_model=="xoxt":
+            self.connection_model = XOXT(n_synaptic_markers, k1)
+        elif connection_model=="mlp":
+            self.connection_model = MLPConn(n_synaptic_markers, k1)
+        else:
+            raise ValueError("no such conn model")
+
         self.A = nn.MLP(n_synaptic_markers+n_fields, n_synaptic_markers, 16, 1, key=k2)
         
         self.n_types = n_types
-        self.max_nodes = max_nodes_per_type * n_types
+        self.max_nodes = max_nodes
         self.dt = dt
         self.dvpt_time = dvpt_time
         self.temperature_decay = temperature_decay
         self.N_gain = N_gain
+        self.body_shape = body_shape
     # ---
     def initialize(self, key: jax.Array)->CTRNN:
         
@@ -149,7 +176,7 @@ class Model_E(CTRNNPolicy):
         step_fn = lambda i, x: migration_step(
             xs=x, t=self.dt*i, psis=node_types.psi, gammas=node_types.gamma, zetas=node_types.zeta, mask=node_types.active, 
             thetas=node_types.theta, dt=self.dt, temperature_decay=self.temperature_decay, migration_field=self.migration_field, 
-            key=jr.key(1)
+            shape=self.body_shape, key=jr.key(1)
         )
         xs = jax.lax.fori_loop(0, int(self.dvpt_time//self.dt), step_fn, x0)
         
@@ -161,7 +188,7 @@ class Model_E(CTRNNPolicy):
         
         M = jax.vmap(molecular_field)(xs)
         g = jax.vmap(self.A)(jnp.concatenate([node_types.omega,M], axis=-1))
-        W = g @ self.O @ g.T
+        W = jax.vmap(jax.vmap(self.connection_model, in_axes=(0,None)), in_axes=(None,0))(g,g)
         W = W * (node_types.active[:,None] * node_types.active[None])
         network = CTRNN(
             v=jnp.zeros(xs.shape[0]), 

@@ -50,17 +50,21 @@ class Config(NamedTuple):
     eval_reps: int=1
     log: bool=True
     elite_ratio: float=0.2
-    p_duplicate: float=0.1
-    p_rm: float=0.0
-    p_add: float=0.0
+    # --- mutations ---
+    p_duplicate: float=0.01
+    p_rm: float=0.01
+    p_add: float=0.01
     p_mut: float=1.0
-    sigma: float=0.1
+    sigma: float=0.01
+    # --- model ---
     N0: int=8
     N_max: int=256
     N_gain: float=10.0
     init_cfg: str="single"
     T_dev: float=10.0
     dt_dev: float=0.1
+    conn_model: str="mlp"
+    # --- fitness ---
     connection_penalty_coeff: float=0.0
     neurons_penalty_coeff: float=0.0
     sensor_penalty_coeff: float=0.0
@@ -78,7 +82,8 @@ def train(cfg: Config):
 
     n_types = 8
     policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
-    policy = Model_E(n_types, 8, max_nodes_per_type=cfg.N_max//8, dt=cfg.dt_dev, dvpt_time=cfg.T_dev, policy_cfg=policy_cfg, N_gain=cfg.N_gain, key=random_key())
+    policy = Model_E(n_types, 8, max_nodes=cfg.N_max, dt=cfg.dt_dev, dvpt_time=cfg.T_dev, policy_cfg=policy_cfg, 
+        N_gain=cfg.N_gain, connection_model=cfg.conn_model, key=random_key())
     if cfg.init_cfg=="single":
         policy = make_single_type(policy, cfg.N0)
     elif cfg.init_cfg=="two":
@@ -99,10 +104,10 @@ def train(cfg: Config):
     # ---
 
     prms, sttcs = eqx.partition(policy, eqx.is_array)
-    prms = eqx.tree_at(lambda tree: tree.O, prms, jnp.zeros_like(prms.O))
-    init_prms = prms
     fctry = lambda prms: eqx.combine(prms, sttcs)
     params_shaper = ex.ParameterReshaper(prms, verbose=False)
+
+    # ---
 
     def metrics_fn(state, data):
         log_data, ckpt_data, ep = rx.default_es_metrics(state, data)
@@ -121,6 +126,8 @@ def train(cfg: Config):
         log_data["evaluation: network size"] = net.mask.sum()
         log_data["evaluation: active types"] = policy.types.active.sum()
         return log_data, ckpt_data, ep
+
+    # ---
         
     _tsk = rx.GymnaxTask(cfg.env, fctry)
 
@@ -149,16 +156,6 @@ def train(cfg: Config):
         return fitness, data
 
 
-    mutation_mask = jax.tree.map(lambda x: jnp.ones_like(x), init_prms)
-    mutation_mask = eqx.tree_at(lambda t: t.types.active, mutation_mask, jnp.zeros_like(init_prms.types.active))
-    mutation_mask = eqx.tree_at(lambda t: t.types.id_, mutation_mask, jnp.zeros_like(init_prms.types.id_))
-    mutation_mask = params_shaper.flatten_single(mutation_mask)
-    clip_min = jax.tree.map(lambda x: jnp.full_like(x, -jnp.inf), init_prms)
-    clip_min = eqx.tree_at(lambda tree: tree.types.gamma, clip_min, jnp.full_like(init_prms.types.gamma, 1e-8))
-    clip_min = eqx.tree_at(lambda tree: tree.types.pi, clip_min, jnp.zeros_like(init_prms.types.pi))
-    clip_min = params_shaper.flatten_single(clip_min)
-    clip_max = jax.tree.map(lambda x: jnp.full_like(x, jnp.inf), init_prms)
-    clip_max = params_shaper.flatten_single(clip_max)
     mutation_fn = lambda x, k, s: mutate(x, k, cfg.p_duplicate, cfg.p_mut, cfg.p_rm, cfg.p_add, s.sigma, params_shaper)
 
     ga = GA(mutation_fn, prms, cfg.pop, elite_ratio=cfg.elite_ratio, sigma_init=cfg.sigma, sigma_decay=1., sigma_limit=0.01, p_duplicate=cfg.p_duplicate)
@@ -182,7 +179,7 @@ def train(cfg: Config):
 
 if __name__ == '__main__':
 
-    cfg = Config(pop=256, gens=16, p_duplicate=0.01, sigma=0.01, N0=8)
+    cfg = Config(pop=64, gens=16, p_duplicate=0.01, sigma=0.01, N0=8)
     train(cfg)
 
     # tsk = rx.GymnaxTask("CartPole-v1")
