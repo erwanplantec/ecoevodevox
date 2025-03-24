@@ -22,6 +22,7 @@ from typing import NamedTuple
 
 class Config(NamedTuple):
 	# --- training ---
+	log: bool=True
 	gens: int=256
 	batch_size: int=256
 	grid_shape: tuple=(32,32)
@@ -29,11 +30,13 @@ class Config(NamedTuple):
 	lasers: int=32
 	sensor_neurons_min_norm: float=0.8
 	motor_neurons_min_norm: float=0.8
+	motor_neurons_force: float=0.1
 	# --- model ---
 	max_types: int=8
 	max_nodes: int=128
 	synaptic_markers: int=8
 	N_gain: float=100.0
+	conn_model="mlp"
 	# --- mutations ---
 	sigma_mut: float=0.01
 	p_duplicate: float=0.005
@@ -79,11 +82,11 @@ def train(cfg: Config, key: jax.Array):
 		xs_x = ctrnn.x[:,0]
 
 		on_left_motor = jnp.where(xs_x < -cfg.motor_neurons_min_norm, 
-							 	  ctrnn.m[:,0]*ctrnn.v, 
+							 	  ctrnn.m[:,0]*ctrnn.v*cfg.motor_neurons_force, 
 								  0.0)
 
 		on_right_motor = jnp.where(xs_x > cfg.motor_neurons_min_norm, 
-							 	   ctrnn.m[:,0]*ctrnn.v, 
+							 	   ctrnn.m[:,0]*ctrnn.v*cfg.motor_neurons_force, 
 								   0.0)
 
 		action = jnp.array([on_left_motor.sum(), on_right_motor.sum()])
@@ -96,7 +99,7 @@ def train(cfg: Config, key: jax.Array):
 	model = Model_E(cfg.max_types, cfg.synaptic_markers, cfg.max_nodes, 
 		sensory_dimensions=2, motor_dimensions=1, temperature_decay=0.98, 
 		extra_migration_fields=3, N_gain=cfg.N_gain, body_shape="square", policy_cfg=policy_cfg,
-		key=key_mdl)
+		connection_model=cfg.conn_model, key=key_mdl)
 	model = make_single_type(model, 8)
 	
 	prms, sttcs = model.partition()
@@ -148,16 +151,23 @@ def train(cfg: Config, key: jax.Array):
 
 	def metrics_fn(state, data):
 		repertoire = state.repertoire
+		genotypes = repertoire.genotypes
+		mask = ~jnp.isinf(repertoire.fitnesses)
+		
+		prms = prms_shaper.reshape(genotypes)
 
 		log_data = dict(
-			coverage = jnp.where(jnp.isinf(repertoire.fitnesses), 0.0, 1.0).mean(),
+			coverage = jnp.where(mask, 1.0, 0.0).mean(),
 			max_fitness = jnp.max(repertoire.fitnesses),
-			qd = jnp.sum(jnp.where(jnp.isinf(repertoire.fitnesses), 0.0, repertoire.fitnesses)) #type:ignore
+			qd = jnp.sum(jnp.where(mask, repertoire.fitnesses, 0.0)), #type:ignore
+			avg_active_types=jnp.sum(jnp.where(mask, prms.types.active.sum(-1), 0.0)) / mask.sum(), #type:ignore
+			active_types=jnp.where(mask, prms.types.active.sum(-1), 0.0), #type:ignore
+			max_active_types = prms.types.active.sum(-1).max(), #type:ignore
 		)
 
 		return log_data, None, 0
 
-	logger = rx.Logger(True, metrics_fn=metrics_fn)
+	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn)
 
 	trainer = rx.QDTrainer(emitter, task, cfg.gens, params_like=prms, bd_minval=0.0, bd_maxval=1.0, grid_shape=cfg.grid_shape, logger=logger) 
 	
@@ -170,14 +180,14 @@ def train(cfg: Config, key: jax.Array):
 	init_genotypes = jax.vmap(_mutation_fn, in_axes=(None,0))(x_init,jr.split(k_init, cfg.batch_size)) #type:ignore
 	init_fitnesses, init_bds, _ = trainer.eval(init_genotypes, k_eval, None)
 	repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
-	emitter_state, _ = trainer.emitter.init(k_emit, repertoire, init_genotypes, init_fitnesses, init_bds, None)
+	emitter_state, _ = trainer.emitter.init(k_emit, repertoire, init_genotypes, init_fitnesses, init_bds, None) #type:ignore
 	init_state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
 	
-	wandb.init(project="eedx_qd", config=cfg._asdict())
+	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
 	state = jax.block_until_ready(trainer.train_(init_state, key_train))
-	wandb.finish()
+	if cfg.log: wandb.finish()
 
-	plot_2d_map_elites_repertoire(trainer.centroids, state.repertoire.fitnesses, minval=0.0, maxval=1.0)
+	plot_2d_map_elites_repertoire(trainer.centroids, state.repertoire.fitnesses, minval=0.0, maxval=1.0) #type:ignore
 
 	plt.show()
 
@@ -185,7 +195,7 @@ def train(cfg: Config, key: jax.Array):
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=32, gens=128, N_gain=100, p_duplicate=0.01, variation_percentage=0.1)
+	cfg = Config(batch_size=32, gens=16, N_gain=100, p_duplicate=0.01, variation_percentage=0.1)
 	train(cfg, jr.key(1))
 
 
