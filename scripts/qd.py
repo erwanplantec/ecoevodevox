@@ -65,6 +65,12 @@ class Config(NamedTuple):
 	line_sigma: float=0.01
 	variation_percentage: float=0.5
 
+def sensor_expression(s):
+	return jnn.sigmoid(s)
+
+def motor_expression(m):
+	return jnn.sigmoid(m)
+
 def train(cfg: Config):
 
 	key = jr.key(cfg.seed)
@@ -87,10 +93,10 @@ def train(cfg: Config):
 		is_on_border = xs_norm>cfg.sensor_neurons_min_norm
 		dists = jnp.linalg.norm(xs[:,None] - laser_positions, axis=-1)
 		closest = jnp.argmin(dists, axis=-1)
-		is_sensor = ctrnn.s[:,0]>cfg.sensor_threshold
+		s = sensor_expression(ctrnn.s[:,0])
 		I = jnp.where(
-			is_on_border&is_sensor,
-			laser_values[closest],
+			is_on_border,
+			laser_values[closest]*s,
 			jnp.zeros_like(ctrnn.v)
 		)
 
@@ -101,15 +107,15 @@ def train(cfg: Config):
 		assert ctrnn.m is not None
 		# ---
 		xs_x = ctrnn.x[:,0]
-		is_motor = ctrnn.m[:,0] > cfg.motor_threshold
 		is_on_left_border = xs_x < -cfg.motor_neurons_min_norm
 		is_on_right_border = xs_x > cfg.motor_neurons_min_norm
-		on_left_motor = jnp.where(is_on_left_border&is_motor, 
-							 	  ctrnn.v*cfg.motor_neurons_force, 
+		m = motor_expression(ctrnn.m[:,0])
+		on_left_motor = jnp.where(is_on_left_border, 
+							 	  ctrnn.v*cfg.motor_neurons_force*m, 
 								  0.0)
 
-		on_right_motor = jnp.where(is_on_right_border&is_motor, 
-							 	   ctrnn.v*cfg.motor_neurons_force, 
+		on_right_motor = jnp.where(is_on_right_border, 
+							 	   ctrnn.v*cfg.motor_neurons_force*m, 
 								   0.0)
 
 		action = jnp.array([on_left_motor.sum(), on_right_motor.sum()])
@@ -126,7 +132,8 @@ def train(cfg: Config):
 	model = eqx.tree_at(lambda m: [m.types.s, m.types.m],
 						model,
 						[jnp.where(model.types.active.astype(bool), model.types.s, cfg.sensor_threshold),
-						 jnp.where(model.types.active.astype(bool), model.types.s, cfg.motor_threshold)])
+						 jnp.where(model.types.active.astype(bool), model.types.s, cfg.motor_threshold)]
+	)
 	
 	prms, sttcs = model.partition()
 	prms_shaper = ex.ParameterReshaper(prms)
@@ -200,10 +207,8 @@ def train(cfg: Config):
 		D = jnp.linalg.norm(xs[None]-xs[:,None], axis=-1)
 		connections = (jnp.abs(policy_state.W) * D).sum()
 		nb_neurons = policy_state.mask.sum()
-		is_sensor = policy_state.s[:,0]>cfg.sensor_threshold
-		is_motor = policy_state.m[:,0]>cfg.motor_threshold
-		sensors = (is_sensor * policy_state.mask).sum()
-		motors = (is_motor * policy_state.mask).sum()
+		sensors = (sensor_expression(policy_state.s[:,0]) * policy_state.mask).sum()
+		motors = (motor_expression(policy_state.m[:,0]) * policy_state.mask).sum()
 
 		connections_penalty = connections * cfg.connection_cost
 		neurons_penalty = nb_neurons * cfg.neuron_cost
