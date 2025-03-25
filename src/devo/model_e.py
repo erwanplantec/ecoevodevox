@@ -17,6 +17,7 @@ from jaxtyping import Float, Int, PyTree
 class NeuronType(NamedTuple):
     # ---
     pi: Float
+    pi_gain: Float
     active: Float
     id_: Int
     # -- Migration Parameters ---
@@ -124,6 +125,7 @@ class Model_E(CTRNNPolicy):
         
         types = NeuronType(
             pi = jnp.zeros(n_types),
+            pi_gain = jnp.ones(n_types),
             psi = jnp.zeros((n_types, n_fields)),
             gamma = jnp.zeros((n_types, n_fields))+0.001,
             zeta = jnp.zeros((n_types, n_fields)),
@@ -162,7 +164,7 @@ class Model_E(CTRNNPolicy):
         x0 = jr.normal(key, (self.max_nodes, 2)) * 0.01
         node_type_ids = jnp.zeros(self.max_nodes)
         n_tot = 0
-        pi = self.types.pi*self.types.active
+        pi = self.types.pi * self.types.pi_gain * self.types.active
         ns = jnp.round(pi * self.N_gain)
         for _, (n, msk) in enumerate(zip(ns, self.types.active)):
             node_type_ids = jnp.where(jnp.arange(self.max_nodes)<n_tot+n*msk, node_type_ids+1, node_type_ids)
@@ -210,6 +212,7 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
     n_total = n_sensory_neurons + n_motor_neurons
     sensory_type = NeuronType(
         pi = n_sensory_neurons/mdl.N_gain, 
+        pi_gain=1.,
         id_ = 0,
         psi = jnp.array([0.,-1.,0., 0., 0., 1., 0., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0.05, 0., 0.]),
@@ -226,6 +229,7 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
     
     motor_type = NeuronType(
         pi = n_motor_neurons/mdl.N_gain,
+        pi_gain=1.,
         id_ = 1,
         psi = jnp.array([0.,1.,0., 0., 0., 0., 1., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0., 0.08, 0.]),
@@ -250,6 +254,7 @@ def make_single_type(mdl, n_neurons):
     n_synaptic_markers = mdl.types.omega.shape[-1]
     sensorimotor_type = NeuronType(
         pi = n_neurons/mdl.N_gain, 
+        pi_gain=1.,
         id_ = 0,
         psi = jnp.array([0.,0.,0., 0., 0., 1., 0., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0.1, 0., 0.]),
@@ -355,12 +360,14 @@ min_prms = lambda prms_like: eqx.tree_at(
     lambda tree: [
         tree.types.theta, 
         tree.types.pi,
+        tree.types.pi_gain,
         tree.types.gamma
     ],
     jax.tree.map(lambda x: jnp.full_like(x, -jnp.inf), prms_like),
     [
         jnp.zeros_like(prms_like.types.theta),
         jnp.zeros_like(prms_like.types.pi),
+        jnp.full_like(prms_like.types.pi_gain, 0.1),
         jnp.full_like(prms_like.types.gamma, 1e-8)
     ]
 )
