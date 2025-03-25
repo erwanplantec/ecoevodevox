@@ -45,6 +45,8 @@ class Config(NamedTuple):
 	sensor_neurons_min_norm: float=0.8
 	motor_neurons_min_norm: float=0.8
 	motor_neurons_force: float=0.1
+	sensor_threshold: float=0.5
+	motor_threshold: float=0.5
 	# --- model ---
 	max_types: int=8
 	max_nodes: int=128
@@ -85,11 +87,13 @@ def train(cfg: Config):
 		is_on_border = xs_norm>cfg.sensor_neurons_min_norm
 		dists = jnp.linalg.norm(xs[:,None] - laser_positions, axis=-1)
 		closest = jnp.argmin(dists, axis=-1)
+		is_sensor = ctrnn.s>cfg.sensor_threshold
 		I = jnp.where(
-			is_on_border,
-			laser_values[closest] * jnn.sigmoid(ctrnn.s[:,0]*2.0),
+			is_on_border&is_sensor,
+			laser_values[closest],
 			jnp.zeros_like(ctrnn.v)
 		)
+
 		return I
 
 	def decode_fn(ctrnn: CTRNN):
@@ -97,13 +101,15 @@ def train(cfg: Config):
 		assert ctrnn.m is not None
 		# ---
 		xs_x = ctrnn.x[:,0]
-
-		on_left_motor = jnp.where(xs_x < -cfg.motor_neurons_min_norm, 
-							 	  jnn.sigmoid(ctrnn.m[:,0]*2.0)*ctrnn.v*cfg.motor_neurons_force, 
+		is_motor = ctrnn.m[:,0] > cfg.motor_threshold
+		is_on_left_border = xs_x < -cfg.motor_neurons_min_norm
+		is_on_right_border = xs_x > cfg.motor_neurons_min_norm
+		on_left_motor = jnp.where(is_on_left_border&is_motor, 
+							 	  ctrnn.v*cfg.motor_neurons_force, 
 								  0.0)
 
-		on_right_motor = jnp.where(xs_x > cfg.motor_neurons_min_norm, 
-							 	   jnn.sigmoid(ctrnn.m[:,0]*2.0)*ctrnn.v*cfg.motor_neurons_force, 
+		on_right_motor = jnp.where(is_on_right_border&is_motor, 
+							 	   ctrnn.v*cfg.motor_neurons_force, 
 								   0.0)
 
 		action = jnp.array([on_left_motor.sum(), on_right_motor.sum()])
@@ -190,8 +196,10 @@ def train(cfg: Config):
 		D = jnp.linalg.norm(xs[None]-xs[:,None], axis=-1)
 		connections = (jnp.abs(policy_state.W) * D).sum()
 		nb_neurons = policy_state.mask.sum()
-		sensors = (jnn.sigmoid(policy_state.s*2.0) * policy_state.mask[:,None]).sum()
-		motors = (jnn.sigmoid(policy_state.m*2.0) * policy_state.mask[:,None]).sum()
+		is_sensor = policy_state.s[:,0]>cfg.sensor_threshold
+		is_motor = policy_state.m[:,0]>cfg.motor_threshold
+		sensors = (is_sensor & policy_state.mask[:,None]).sum()
+		motors = (is_motor & policy_state.mask[:,None]).sum()
 
 		connections_penalty = connections * cfg.connection_cost
 		neurons_penalty = nb_neurons * cfg.neuron_cost
@@ -267,7 +275,7 @@ def train(cfg: Config):
 	state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
 	
 	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
-	
+
 	while True:
 		gens = input("Training generations:")
 		if not gens: 
