@@ -157,6 +157,8 @@ def train(cfg: Config):
 			lambda xs: jnp.stack([x[...,i] for x, i in zip(xs, type_selec)]), 
 			jax.tree.map(lambda a,b: jnp.stack([a,b], axis=-1), prms1.types, prms2.types)
 		)
+		order = jnp.argsort(types.active, descending=True)
+		types = jax.tree.map(lambda x: x[order], types)
 		prms = eqx.tree_at(lambda p: p.types, prms1, types)
 		x = prms_shaper.flatten_single(prms)
 		return x, key
