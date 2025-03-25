@@ -29,7 +29,6 @@ class Config(NamedTuple):
 	# --- training ---
 	seed: int=0
 	log: bool=True
-	gens: int=256
 	batch_size: int=256
 	grid_shape: tuple=(32,32)
 	plot_freq: int=100
@@ -142,7 +141,7 @@ def train(cfg: Config):
 		keys = jr.split(key, x_batch.shape[0])
 		return jax.vmap(_mutation_fn)(x_batch, keys), new_key
 
-	_variation_fn = partial(
+	_isoline_variation = partial(
 		isoline_variation,
 		iso_sigma=cfg.iso_sigma,
 		line_sigma=cfg.line_sigma,
@@ -154,7 +153,10 @@ def train(cfg: Config):
 		prms2 = prms_shaper.reshape_single(x2)
 
 		type_selec = jr.choice(key, 2, shape=(cfg.max_types,))
-		types = jax.tree.map(lambda x: x[type_selec], jax.tree.map(lambda a,b: jnp.stack([a,b]), prms1, prms2))
+		types = jax.tree.map(
+			lambda xs: jnp.stack([x[...,i] for x, i in zip(xs, type_selec)]), 
+			jax.tree.map(lambda a,b: jnp.stack([a,b], axis=-1), prms1.types, prms2.types)
+		)
 		prms = eqx.tree_at(lambda p: p.types, prms1, types)
 		x = prms_shaper.flatten_single(prms)
 		return x, key
@@ -164,7 +166,7 @@ def train(cfg: Config):
 		if cfg.variation_mode=="cross":
 			x_varied, _ = jax.vmap(_crossover)(x1, x2, jr.split(key, x1.shape[0]))
 		elif cfg.variation_mode=="isoline":
-			x_varied, _ = _variation_fn(x1, x2, key)
+			x_varied, _ = _isoline_variation(x1, x2, key)
 		x_varied = jnp.where(prms_mask.astype(bool), x_varied, x1) #type:ignore
 		return x_varied, new_key
 
@@ -249,7 +251,7 @@ def train(cfg: Config):
 		return data
 	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)
 
-	trainer = rx.QDTrainer(emitter, task, cfg.gens, params_like=prms, bd_minval=0.0, bd_maxval=1.0, grid_shape=cfg.grid_shape, logger=logger) 
+	trainer = rx.QDTrainer(emitter, task, 1, params_like=prms, bd_minval=0.0, bd_maxval=1.0, grid_shape=cfg.grid_shape, logger=logger) 
 	
 	#-------------------------------------------------------------------
 	#-------------------------------------------------------------------
@@ -264,7 +266,16 @@ def train(cfg: Config):
 	init_state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
 	
 	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
-	state = jax.block_until_ready(trainer.train_(init_state, key_train))
+	while True:
+		gens = input("Training generations:")
+		if not gens: 
+			break
+		try: 
+			gens = int(gens)
+		except: 
+			continue
+		trainer.train_steps = int(gens)
+		state = jax.block_until_ready(trainer.train_(init_state, key_train))
 
 	fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
 	repertoire = state.repertoire
@@ -284,7 +295,7 @@ def train(cfg: Config):
 	ax[2].set_title("N")
 	ax[2].set_ylabel("")
 	fig.tight_layout()
-	wandb.log(dict(final_result=wandb.Image(fig)))
+	if cfg.log: wandb.log(dict(final_result=wandb.Image(fig)))
 
 	#-------------------------------------------------------------------
 
@@ -320,7 +331,7 @@ def train(cfg: Config):
 
 			cam.snap()
 		ani = cam.animate()
-		wandb.log({"result": wandb.Html(ani.to_html5_video())})
+		if cfg.log: wandb.log({"result": wandb.Html(ani.to_html5_video())})
 
 	if cfg.log: wandb.finish()
 
@@ -328,7 +339,7 @@ def train(cfg: Config):
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=8, gens=16, N_gain=100, p_duplicate=0.01, variation_percentage=0.1, plot_freq=5)
+	cfg = Config(batch_size=16, N_gain=100, p_duplicate=0.01, variation_percentage=0.3, plot_freq=5, variation_mode="cross", log=False)
 	train(cfg)
 
 
