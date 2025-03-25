@@ -264,7 +264,7 @@ def train(cfg: Config):
 	init_fitnesses, init_bds, _ = trainer.eval(init_genotypes, k_eval, None)
 	repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	emitter_state, _ = trainer.emitter.init(k_emit, repertoire, init_genotypes, init_fitnesses, init_bds, None) #type:ignore
-	init_state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
+	state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
 	
 	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
 	state = None
@@ -277,7 +277,8 @@ def train(cfg: Config):
 		except: 
 			continue
 		trainer.train_steps = int(gens)
-		state = jax.block_until_ready(trainer.train_(init_state, key_train))
+		key_train, key = jr.split(key_train)
+		state = jax.block_until_ready(trainer.train_(state, key))
 
 		fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
 		repertoire = state.repertoire
