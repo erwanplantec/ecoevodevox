@@ -267,7 +267,7 @@ def train(cfg: Config):
 	state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
 	
 	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
-	state = None
+	
 	while True:
 		gens = input("Training generations:")
 		if not gens: 
