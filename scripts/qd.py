@@ -1,5 +1,4 @@
 from functools import partial
-from annotated_types import IsInfinite
 from jax.flatten_util import ravel_pytree
 from jaxtyping import PyTree
 import realax as rx
