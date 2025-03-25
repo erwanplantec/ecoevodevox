@@ -243,60 +243,60 @@ def train(cfg: Config):
 	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
 	state = jax.block_until_ready(trainer.train_(init_state, key_train))
 
-	fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
-	repertoire = state.repertoire
-	fitnesses = repertoire.fitnesses
-	genotypes = repertoire.genotypes
-	mask = ~np.isinf(fitnesses)
-	prms: PyTree = prms_shaper.reshape(genotypes)
-	active_types = prms.types.active.sum(-1)
-	network_size = np.sum(prms.types.active * prms.types.pi * cfg.N_gain, axis=-1)
+	# fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
+	# repertoire = state.repertoire
+	# fitnesses = repertoire.fitnesses
+	# genotypes = repertoire.genotypes
+	# mask = ~np.isinf(fitnesses)
+	# prms: PyTree = prms_shaper.reshape(genotypes)
+	# active_types = prms.types.active.sum(-1)
+	# network_size = np.sum(prms.types.active * prms.types.pi * cfg.N_gain, axis=-1)
 
-	plot_2d_map_elites_repertoire(trainer.centroids, fitnesses, minval=0.0, maxval=1.0, ax=ax[0]) #type:ignore
-	ax[0].set_title("fitness")
-	plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, active_types, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[1])
-	ax[1].set_title("#types")
-	ax[1].set_ylabel("")
-	plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[2])
-	ax[2].set_title("N")
-	ax[2].set_ylabel("")
-	fig.tight_layout()
-	wandb.log(dict(final_result=wandb.Image(fig)))
+	# plot_2d_map_elites_repertoire(trainer.centroids, fitnesses, minval=0.0, maxval=1.0, ax=ax[0]) #type:ignore
+	# ax[0].set_title("fitness")
+	# plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, active_types, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[1])
+	# ax[1].set_title("#types")
+	# ax[1].set_ylabel("")
+	# plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[2])
+	# ax[2].set_title("N")
+	# ax[2].set_ylabel("")
+	# fig.tight_layout()
+	# wandb.log(dict(final_result=wandb.Image(fig)))
 
-	#-------------------------------------------------------------------
-	if cfg.make_animation=="ask":
-		make_animation=input("make animation ?")
-		make_animation = make_animation in ["y", "Y"]
-	else:
-		make_animation = cfg.make_animation
+	# #-------------------------------------------------------------------
+	# if cfg.make_animation=="ask":
+	# 	make_animation=input("make animation ?")
+	# 	make_animation = make_animation in ["y", "Y"]
+	# else:
+	# 	make_animation = cfg.make_animation
 
-	if make_animation:
-		fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
-		cam = Camera(fig)
-		max_fitness = max([r.fitnesses.max() for r in repertoires])
-		min_fitness = min([np.where(np.isinf(r.fitnesses), np.inf, r.fitnesses).min() for r in repertoires])
-		max_types = max([np.max(prms_shaper.reshape(r.genotypes).types.active.sum(-1)) for r in repertoires])
-		min_types = 0
-		for repertoire in repertoires:
-			fitnesses = repertoire.fitnesses
-			genotypes = repertoire.genotypes
-			mask = ~np.isinf(fitnesses)
-			prms: PyTree = prms_shaper.reshape(genotypes)
-			active_types = prms.types.active.sum(-1)
-			network_size = np.sum(prms.types.active * prms.types.pi * cfg.N_gain, axis=-1)
+	# if make_animation:
+	# 	fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
+	# 	cam = Camera(fig)
+	# 	max_fitness = max([r.fitnesses.max() for r in repertoires])
+	# 	min_fitness = min([np.where(np.isinf(r.fitnesses), np.inf, r.fitnesses).min() for r in repertoires])
+	# 	max_types = max([np.max(prms_shaper.reshape(r.genotypes).types.active.sum(-1)) for r in repertoires])
+	# 	min_types = 0
+	# 	for repertoire in repertoires:
+	# 		fitnesses = repertoire.fitnesses
+	# 		genotypes = repertoire.genotypes
+	# 		mask = ~np.isinf(fitnesses)
+	# 		prms: PyTree = prms_shaper.reshape(genotypes)
+	# 		active_types = prms.types.active.sum(-1)
+	# 		network_size = np.sum(prms.types.active * prms.types.pi * cfg.N_gain, axis=-1)
 
-			plot_2d_map_elites_repertoire(trainer.centroids, fitnesses, minval=0.0, maxval=1.0, ax=ax[0], vmin=min_fitness, vmax=max_fitness) #type:ignore
-			ax[0].set_title("fitness")
-			plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, active_types, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[1], vmin=min_types, vmax=max_types)
-			ax[1].set_title("#types")
-			ax[1].set_ylabel("")
-			plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[2])
-			ax[2].set_title("N")
-			ax[2].set_ylabel("")
+	# 		plot_2d_map_elites_repertoire(trainer.centroids, fitnesses, minval=0.0, maxval=1.0, ax=ax[0], vmin=min_fitness, vmax=max_fitness) #type:ignore
+	# 		ax[0].set_title("fitness")
+	# 		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, active_types, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[1], vmin=min_types, vmax=max_types)
+	# 		ax[1].set_title("#types")
+	# 		ax[1].set_ylabel("")
+	# 		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[2])
+	# 		ax[2].set_title("N")
+	# 		ax[2].set_ylabel("")
 
-			cam.snap()
-		ani = cam.animate()
-		wandb.log({"result": wandb.Html(ani.to_html5_video())})
+	# 		cam.snap()
+	# 	ani = cam.animate()
+	# 	wandb.log({"result": wandb.Html(ani.to_html5_video())})
 
 	if cfg.log: wandb.finish()
 
