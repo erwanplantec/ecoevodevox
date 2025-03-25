@@ -43,6 +43,7 @@ class Config(NamedTuple):
 	motor_cost: float=0.0
 	# --- robot ---
 	lasers: int=32
+	laser_ranges: float=0.2
 	sensor_neurons_min_norm: float=0.8
 	motor_neurons_min_norm: float=0.8
 	motor_neurons_force: float=0.1
@@ -80,6 +81,7 @@ def train(cfg: Config):
 		assert ctrnn.s is not None
 		# ---
 		laser_values = obs[:cfg.lasers]
+		laser_values = 1.0 - (laser_values/cfg.laser_ranges)
 		xs = ctrnn.x
 		xs_norm = jnp.linalg.norm(xs, axis=-1)
 		is_on_border = xs_norm>cfg.sensor_neurons_min_norm
@@ -87,7 +89,7 @@ def train(cfg: Config):
 		closest = jnp.argmin(dists, axis=-1)
 		I = jnp.where(
 			is_on_border,
-			laser_values[closest] * ctrnn.s[:,0],
+			laser_values[closest] * jnn.sigmoid(ctrnn.s[:,0]*2.0),
 			jnp.zeros_like(ctrnn.v)
 		)
 		return I
@@ -99,11 +101,11 @@ def train(cfg: Config):
 		xs_x = ctrnn.x[:,0]
 
 		on_left_motor = jnp.where(xs_x < -cfg.motor_neurons_min_norm, 
-							 	  jnn.sigmoid(ctrnn.m[:,0]*3.0)*ctrnn.v*cfg.motor_neurons_force, 
+							 	  jnn.sigmoid(ctrnn.m[:,0]*2.0)*ctrnn.v*cfg.motor_neurons_force, 
 								  0.0)
 
 		on_right_motor = jnp.where(xs_x > cfg.motor_neurons_min_norm, 
-							 	   jnn.sigmoid(ctrnn.m[:,0]*3.0)*ctrnn.v*cfg.motor_neurons_force, 
+							 	   jnn.sigmoid(ctrnn.m[:,0]*2.0)*ctrnn.v*cfg.motor_neurons_force, 
 								   0.0)
 
 		action = jnp.array([on_left_motor.sum(), on_right_motor.sum()])
@@ -168,7 +170,7 @@ def train(cfg: Config):
 
 	emitter = MixingEmitter(mutation_fn, variation_fn, cfg.variation_percentage, cfg.batch_size) #type:ignore
 
-	robot_kwargs = dict(laser_angles=laser_angles)
+	robot_kwargs = dict(laser_angles=laser_angles, laser_ranges=cfg.laser_ranges)
 
 	_task = rx.KheperaxTask(maze=cfg.maze, model_factory=mdl_fctry, 
 		robot_kwargs=robot_kwargs, has_target=cfg.has_target)
@@ -185,8 +187,8 @@ def train(cfg: Config):
 		D = jnp.linalg.norm(xs[None]-xs[:,None], axis=-1)
 		connections = (jnp.abs(policy_state.W) * D).sum()
 		nb_neurons = policy_state.mask.sum()
-		sensors = (jnp.abs(policy_state.s) * policy_state.mask[:,None]).sum()
-		motors = (jnn.sigmoid(policy_state.m*3.0) * policy_state.mask[:,None]).sum()
+		sensors = (jnn.sigmoid(policy_state.s*2.0) * policy_state.mask[:,None]).sum()
+		motors = (jnn.sigmoid(policy_state.m*2.0) * policy_state.mask[:,None]).sum()
 
 		connections_penalty = connections * cfg.connection_cost
 		neurons_penalty = nb_neurons * cfg.neuron_cost
