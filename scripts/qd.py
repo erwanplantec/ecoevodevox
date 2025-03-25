@@ -210,17 +210,24 @@ def train(cfg: Config):
 		mask = ~jnp.isinf(repertoire.fitnesses)
 		
 		prms = prms_shaper.reshape(genotypes)
+		active_types = prms.types.active.sum(-1).astype(int) #type:ignore
+
+		nb_types_coverage = {
+			f"{k}-coverage": jnp.where(mask&(active_types==k), 1.0, 0.0).mean()
+		for k in range(4)}
 
 		log_data = dict(
 			repertoire=repertoire,
 			coverage = jnp.where(mask, 1.0, 0.0).mean(),
+			coverage_1 = jnp.where(mask, 1.0, 0.0).mean(),
 			max_fitness = jnp.max(repertoire.fitnesses),
 			fitnesses = repertoire.fitnesses,
 			qd = jnp.sum(jnp.where(mask, repertoire.fitnesses, 0.0)), #type:ignore
-			avg_active_types=jnp.sum(jnp.where(mask, prms.types.active.sum(-1), 0.0)) / mask.sum(), #type:ignore
-			active_types=jnp.where(mask, prms.types.active.sum(-1), 0.0), #type:ignore
-			max_active_types = prms.types.active.sum(-1).max(), #type:ignore
+			avg_active_types=jnp.sum(jnp.where(mask, active_types, 0.0)) / mask.sum(), #type:ignore
+			active_types=jnp.where(mask, active_types, 0.0), #type:ignore
+			max_active_types = active_types.max(), #type:ignore
 			network_size = jnp.where(mask, jnp.sum(prms.types.active*prms.types.pi*cfg.N_gain, axis=-1), 0.0), #type:ignore
+			**nb_types_coverage
 		)
 
 		return log_data, None, 0
@@ -281,6 +288,7 @@ def train(cfg: Config):
 	wandb.log(dict(final_result=wandb.Image(fig)))
 
 	#-------------------------------------------------------------------
+
 	if cfg.make_animation=="ask":
 		make_animation=input("make animation ?")
 		make_animation = make_animation in ["y", "Y"]
