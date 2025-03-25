@@ -123,6 +123,10 @@ def train(cfg: Config):
 		extra_migration_fields=3, N_gain=cfg.N_gain, body_shape="square", policy_cfg=policy_cfg,
 		connection_model=cfg.conn_model, key=key_mdl)
 	model = make_single_type(model, 8)
+	model = eqx.tree_at(lambda m: [m.types.s, m.types.m],
+						model,
+						[jnp.where(model.types.active.astype(bool), model.types.s, cfg.sensor_threshold),
+						 jnp.where(model.types.active.astype(bool), model.types.s, cfg.motor_threshold)])
 	
 	prms, sttcs = model.partition()
 	prms_shaper = ex.ParameterReshaper(prms)
