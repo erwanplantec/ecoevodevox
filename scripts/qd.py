@@ -32,6 +32,9 @@ class Config(NamedTuple):
 	batch_size: int=256
 	grid_shape: tuple=(32,32)
 	plot_freq: int=100
+	# --- env ---
+	has_target: bool=False
+	maze: str="standard"
 	# --- robot ---
 	lasers: int=32
 	sensor_neurons_min_norm: float=0.8
@@ -145,7 +148,8 @@ def train(cfg: Config, key: jax.Array):
 
 	robot_kwargs = dict(laser_angles=laser_angles)
 
-	_task = rx.KheperaxTask("standard", model_factory=mdl_fctry, robot_kwargs=robot_kwargs)
+	_task = rx.KheperaxTask(maze=cfg.maze, model_factory=mdl_fctry, 
+		robot_kwargs=robot_kwargs, has_target=cfg.has_target)
 	
 	def task(prms, key, _=None):
 		fitness, data = _task(prms, key)
