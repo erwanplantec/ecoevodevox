@@ -124,7 +124,6 @@ class Model_E(CTRNNPolicy):
         
         types = NeuronType(
             pi = jnp.zeros(n_types),
-            pi_gain = jnp.ones(n_types),
             psi = jnp.zeros((n_types, n_fields)),
             gamma = jnp.zeros((n_types, n_fields))+0.001,
             zeta = jnp.zeros((n_types, n_fields)),
