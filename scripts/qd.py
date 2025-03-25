@@ -146,10 +146,22 @@ def train(cfg: Config):
 		minval=prms_min, #type:ignore
 		maxval=prms_max #type:ignore
 	)
+	def _crossover(x1, x2, key):
+		prms1 = prms_shaper.reshape_single(x1)
+		prms2 = prms_shaper.reshape_single(x2)
+
+		type_selec = jr.choice(key, 2, shape=(cfg.max_types,))
+		types = jax.tree.map(lambda x: x[type_selec], jax.tree.map(lambda a,b: jnp.stack([a,b]), prms1, prms2))
+		prms = eqx.tree_at(lambda p: p.types, prms1, types)
+		x = prms_shaper.flatten_single(prms)
+		return x, key
+
 	def variation_fn(x1, x2, key):
-		x_varied, key = _variation_fn(x1, x2, key)
+		#x_varied, key = _variation_fn(x1, x2, key)
+		key, new_key = jr.split(key)
+		x_varied, key = jax.vmap(_crossover)(x1, x2, jr.split(key, cfg.batch_size))
 		x_varied = jnp.where(prms_mask.astype(bool), x_varied, x1) #type:ignore
-		return x_varied, key
+		return x_varied, new_key
 
 	emitter = MixingEmitter(mutation_fn, variation_fn, cfg.variation_percentage, cfg.batch_size) #type:ignore
 
