@@ -59,6 +59,7 @@ class Config(NamedTuple):
 	p_rm: float=0.005
 	p_add: float=0.005
 	# --- variation ---
+	variation_mode: str="isoline"
 	iso_sigma: float=0.01
 	line_sigma: float=0.01
 	variation_percentage: float=0.5
@@ -157,9 +158,11 @@ def train(cfg: Config):
 		return x, key
 
 	def variation_fn(x1, x2, key):
-		#x_varied, key = _variation_fn(x1, x2, key)
 		key, new_key = jr.split(key)
-		x_varied, key = jax.vmap(_crossover)(x1, x2, jr.split(key, cfg.batch_size))
+		if cfg.variation_mode=="cross":
+			x_varied, _ = jax.vmap(_crossover)(x1, x2, jr.split(key, cfg.batch_size))
+		elif cfg.variation_mode=="isoline":
+			x_varied, _ = _variation_fn(x1, x2, key)
 		x_varied = jnp.where(prms_mask.astype(bool), x_varied, x1) #type:ignore
 		return x_varied, new_key
 
@@ -183,7 +186,7 @@ def train(cfg: Config):
 		connections = (jnp.abs(policy_state.W) * D).sum()
 		nb_neurons = policy_state.mask.sum()
 		sensors = (jnp.abs(policy_state.s) * policy_state.mask[:,None]).sum()
-		motors = (jnp.abs(policy_state.m) * policy_state.mask[:,None]).sum()
+		motors = (jnn.sigmoid(policy_state.m*3.0) * policy_state.mask[:,None]).sum()
 
 		connections_penalty = connections * cfg.connection_cost
 		neurons_penalty = nb_neurons * cfg.neuron_cost
