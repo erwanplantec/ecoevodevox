@@ -146,7 +146,7 @@ def train(cfg: Config, key: jax.Array):
 	)
 	def variation_fn(x1, x2, key):
 		x_varied, key = _variation_fn(x1, x2, key)
-		x_varied = jnp.where(prms_mask.astype(bool), x_varied, x2) #type:ignore
+		x_varied = jnp.where(prms_mask.astype(bool), x_varied, x1) #type:ignore
 		return x_varied, key
 
 	emitter = MixingEmitter(mutation_fn, variation_fn, cfg.variation_percentage, cfg.batch_size) #type:ignore
