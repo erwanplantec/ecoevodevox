@@ -119,7 +119,7 @@ def train(cfg: Config):
 
 	policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
 	model = Model_E(cfg.max_types, cfg.synaptic_markers, cfg.max_nodes, 
-		sensory_dimensions=2, motor_dimensions=1, temperature_decay=0.98, 
+		sensory_dimensions=1, motor_dimensions=1, temperature_decay=0.98, 
 		extra_migration_fields=3, N_gain=cfg.N_gain, body_shape="square", policy_cfg=policy_cfg,
 		connection_model=cfg.conn_model, key=key_mdl)
 	model = make_single_type(model, 8)
@@ -198,8 +198,8 @@ def train(cfg: Config):
 		nb_neurons = policy_state.mask.sum()
 		is_sensor = policy_state.s[:,0]>cfg.sensor_threshold
 		is_motor = policy_state.m[:,0]>cfg.motor_threshold
-		sensors = (is_sensor & policy_state.mask[:,None]).sum()
-		motors = (is_motor & policy_state.mask[:,None]).sum()
+		sensors = (is_sensor * policy_state.mask).sum()
+		motors = (is_motor * policy_state.mask).sum()
 
 		connections_penalty = connections * cfg.connection_cost
 		neurons_penalty = nb_neurons * cfg.neuron_cost
