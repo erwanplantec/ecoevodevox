@@ -162,7 +162,7 @@ def train(cfg: Config):
 	def variation_fn(x1, x2, key):
 		key, new_key = jr.split(key)
 		if cfg.variation_mode=="cross":
-			x_varied, _ = jax.vmap(_crossover)(x1, x2, jr.split(key, cfg.batch_size))
+			x_varied, _ = jax.vmap(_crossover)(x1, x2, jr.split(key, x1.shape[0]))
 		elif cfg.variation_mode=="isoline":
 			x_varied, _ = _variation_fn(x1, x2, key)
 		x_varied = jnp.where(prms_mask.astype(bool), x_varied, x1) #type:ignore
