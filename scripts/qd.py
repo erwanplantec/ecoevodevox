@@ -10,7 +10,6 @@ import jax.nn as jnn
 import numpy as np
 import equinox as eqx
 import matplotlib
-matplotlib.use('agg')
 import matplotlib.pyplot as plt
 from celluloid import Camera
 import wandb
@@ -268,6 +267,7 @@ def train(cfg: Config):
 	init_state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
 	
 	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
+	state = None
 	while True:
 		gens = input("Training generations:")
 		if not gens: 
@@ -279,25 +279,26 @@ def train(cfg: Config):
 		trainer.train_steps = int(gens)
 		state = jax.block_until_ready(trainer.train_(init_state, key_train))
 
-	fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
-	repertoire = state.repertoire
-	fitnesses = repertoire.fitnesses
-	genotypes = repertoire.genotypes
-	mask = ~np.isinf(fitnesses)
-	prms: PyTree = prms_shaper.reshape(genotypes)
-	active_types = prms.types.active.sum(-1)
-	network_size = np.sum(prms.types.active * prms.types.pi * cfg.N_gain, axis=-1)
+		fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
+		repertoire = state.repertoire
+		fitnesses = repertoire.fitnesses
+		genotypes = repertoire.genotypes
+		mask = ~np.isinf(fitnesses)
+		prms: PyTree = prms_shaper.reshape(genotypes)
+		active_types = prms.types.active.sum(-1)
+		network_size = np.sum(prms.types.active * prms.types.pi * cfg.N_gain, axis=-1)
 
-	plot_2d_map_elites_repertoire(trainer.centroids, fitnesses, minval=0.0, maxval=1.0, ax=ax[0]) #type:ignore
-	ax[0].set_title("fitness")
-	plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, active_types, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[1])
-	ax[1].set_title("#types")
-	ax[1].set_ylabel("")
-	plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[2])
-	ax[2].set_title("N")
-	ax[2].set_ylabel("")
-	fig.tight_layout()
-	if cfg.log: wandb.log(dict(final_result=wandb.Image(fig)))
+		plot_2d_map_elites_repertoire(trainer.centroids, fitnesses, minval=0.0, maxval=1.0, ax=ax[0]) #type:ignore
+		ax[0].set_title("fitness")
+		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, active_types, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[1])
+		ax[1].set_title("#types")
+		ax[1].set_ylabel("")
+		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[2])
+		ax[2].set_title("N")
+		ax[2].set_ylabel("")
+		fig.tight_layout()
+		if cfg.log: wandb.log(dict(final_result=wandb.Image(fig)))
+		plt.show()
 
 	#-------------------------------------------------------------------
 
@@ -333,7 +334,7 @@ def train(cfg: Config):
 
 			cam.snap()
 		ani = cam.animate()
-		if cfg.log: wandb.log({"result": wandb.Html(ani.to_html5_video())})
+		if cfg.log: wandb.log({"result": wandb.Html(ani.to_html5_video())}, commit=False)
 
 	if cfg.log: wandb.finish()
 
