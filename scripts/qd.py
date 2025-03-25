@@ -167,7 +167,7 @@ def train(cfg: Config):
 
 		xs = policy_state.x
 		D = jnp.linalg.norm(xs[None]-xs[:,None], axis=-1)
-		connections = (policy_state.W * D).sum()
+		connections = (jnp.abs(policy_state.W) * D).sum()
 		nb_neurons = policy_state.mask.sum()
 		sensors = (jnp.abs(policy_state.s) * policy_state.mask[:,None]).sum()
 		motors = (jnp.abs(policy_state.m) * policy_state.mask[:,None]).sum()
