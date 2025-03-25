@@ -342,7 +342,7 @@ def train(cfg: Config):
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=16, N_gain=100, p_duplicate=0.01, variation_percentage=0.3, plot_freq=5, variation_mode="cross", log=False)
+	cfg = Config(batch_size=16, N_gain=100, p_duplicate=0.01, variation_percentage=0.3, plot_freq=5, variation_mode="cross", log=True)
 	train(cfg)
 
 
