@@ -198,7 +198,7 @@ def train(cfg: Config):
 			repertoire=repertoire,
 			coverage = jnp.where(mask, 1.0, 0.0).mean(),
 			max_fitness = jnp.max(repertoire.fitnesses),
-			fitnesses = repertoire.fitnesses,
+			#fitnesses = repertoire.fitnesses,
 			qd = jnp.sum(jnp.where(mask, repertoire.fitnesses, 0.0)), #type:ignore
 			avg_active_types=jnp.sum(jnp.where(mask, prms.types.active.sum(-1), 0.0)) / mask.sum(), #type:ignore
 			active_types=jnp.where(mask, prms.types.active.sum(-1), 0.0), #type:ignore
