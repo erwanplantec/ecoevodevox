@@ -36,6 +36,10 @@ class Config(NamedTuple):
 	# --- env ---
 	has_target: bool=False
 	maze: str="standard"
+	connection_cost: float=0.0
+	neuron_cost: float=0.0
+	sensor_cost: float=0.0
+	motor_cost: float=0.0
 	# --- robot ---
 	lasers: int=32
 	sensor_neurons_min_norm: float=0.8
@@ -157,6 +161,22 @@ def train(cfg: Config, key: jax.Array):
 		final_state = data["final_state"]
 		final_pos = final_state.env_state.robot.posture
 		bd = jnp.array([final_pos.x, final_pos.y])
+		policy_state = final_state.policy_state
+
+		xs = policy_state.x
+		D = jnp.linalg.norm(xs[None]-xs[:,None], axis=-1)
+		connections = (policy_state.W * D).sum()
+		nb_neurons = policy_state.active.sum()
+		sensors = (jnp.abs(policy_state.s) * policy_state.active).sum()
+		motors = (jnp.abs(policy_state.m) * policy_state.active).sum()
+
+		connections_penalty = connections * cfg.connection_cost
+		neurons_penalty = nb_neurons * cfg.neuron_cost
+		sensors_penalty = sensors * cfg.sensor_cost
+		motors_penalty = motors * cfg.motor_cost
+
+		fitness = fitness - connections_penalty - neurons_penalty - sensors_penalty - motors_penalty
+
 		return fitness, bd, data
 
 	#-------------------------------------------------------------------
@@ -172,9 +192,10 @@ def train(cfg: Config, key: jax.Array):
 		prms = prms_shaper.reshape(genotypes)
 
 		log_data = dict(
-			result=repertoire,
+			repertoire=repertoire,
 			coverage = jnp.where(mask, 1.0, 0.0).mean(),
 			max_fitness = jnp.max(repertoire.fitnesses),
+			fitnesses = repertoire.fitnesses,
 			qd = jnp.sum(jnp.where(mask, repertoire.fitnesses, 0.0)), #type:ignore
 			avg_active_types=jnp.sum(jnp.where(mask, prms.types.active.sum(-1), 0.0)) / mask.sum(), #type:ignore
 			active_types=jnp.where(mask, prms.types.active.sum(-1), 0.0), #type:ignore
@@ -189,11 +210,16 @@ def train(cfg: Config, key: jax.Array):
 	counter = [0]
 
 	def host_transform(data):
+		data = jax.tree.map(np.asarray, data)
 		counter[0] += 1
 		if not counter[0]%cfg.plot_freq:
 			generations.append(counter[0])
-			repertoires.append(jax.tree.map(lambda x: np.asarray(x), data["result"]))
-		del data["result"]
+			repertoires.append(data["repertoire"])
+		del data["repertoire"]
+		mask = ~np.isinf(data["fitnesses"])
+		data["active_types"] = data["active_types"][mask]
+		data["network_size"] = data["network_size"][mask]
+		data["fitnesses"] = data["fitnesses"][mask]
 		return data
 	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)
 
