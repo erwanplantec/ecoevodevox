@@ -87,7 +87,7 @@ def train(cfg: Config):
 		is_on_border = xs_norm>cfg.sensor_neurons_min_norm
 		dists = jnp.linalg.norm(xs[:,None] - laser_positions, axis=-1)
 		closest = jnp.argmin(dists, axis=-1)
-		is_sensor = ctrnn.s>cfg.sensor_threshold
+		is_sensor = ctrnn.s[:,0]>cfg.sensor_threshold
 		I = jnp.where(
 			is_on_border&is_sensor,
 			laser_values[closest],
