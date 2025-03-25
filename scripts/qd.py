@@ -213,16 +213,16 @@ def train(cfg: Config):
 	counter = [0]
 
 	def host_transform(data):
-		data = jax.tree.map(np.asarray, data)
+		#data = jax.tree.map(np.asarray, data)
 		counter[0] += 1
 		if not counter[0]%cfg.plot_freq:
 			generations.append(counter[0])
-			repertoires.append(data["repertoire"])
+			repertoires.append(jax.tree.map(np.asarray, data["repertoire"]))
 		del data["repertoire"]
-		mask = ~np.isinf(data["fitnesses"])
-		data["active_types"] = data["active_types"][mask]
-		data["network_size"] = data["network_size"][mask]
-		data["fitnesses"] = data["fitnesses"][mask]
+		#mask = ~np.isinf(data["fitnesses"])
+		# data["active_types"] = data["active_types"][mask]
+		# data["network_size"] = data["network_size"][mask]
+		# data["fitnesses"] = data["fitnesses"][mask]
 		return data
 	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)
 
