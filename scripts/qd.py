@@ -27,6 +27,7 @@ from typing import NamedTuple
 
 class Config(NamedTuple):
 	# --- training ---
+	seed: int=0
 	log: bool=True
 	gens: int=256
 	batch_size: int=256
@@ -62,8 +63,9 @@ class Config(NamedTuple):
 	line_sigma: float=0.01
 	variation_percentage: float=0.5
 
-def train(cfg: Config, key: jax.Array):
+def train(cfg: Config):
 
+	key = jr.key(cfg.seed)
 	key_train, key_init, key_mdl = jr.split(key, 3)
 
 	angle_step = 2*jnp.pi / cfg.lasers
@@ -302,7 +304,7 @@ def train(cfg: Config, key: jax.Array):
 
 if __name__ == '__main__':
 	cfg = Config(batch_size=8, gens=16, N_gain=100, p_duplicate=0.01, variation_percentage=0.1, plot_freq=5)
-	train(cfg, jr.key(1))
+	train(cfg)
 
 
 
