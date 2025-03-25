@@ -214,12 +214,11 @@ def train(cfg: Config):
 
 		nb_types_coverage = {
 			f"{k}-coverage": jnp.where(mask&(active_types==k), 1.0, 0.0).mean()
-		for k in range(4)}
+		for k in range(1, cfg.max_types+1)}
 
 		log_data = dict(
 			repertoire=repertoire,
 			coverage = jnp.where(mask, 1.0, 0.0).mean(),
-			coverage_1 = jnp.where(mask, 1.0, 0.0).mean(),
 			max_fitness = jnp.max(repertoire.fitnesses),
 			fitnesses = repertoire.fitnesses,
 			qd = jnp.sum(jnp.where(mask, repertoire.fitnesses, 0.0)), #type:ignore
