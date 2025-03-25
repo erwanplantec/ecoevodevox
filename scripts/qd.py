@@ -163,21 +163,22 @@ def train(cfg: Config):
 		final_state = data["final_state"]
 		final_pos = final_state.env_state.robot.posture
 		bd = jnp.array([final_pos.x, final_pos.y])
-		policy_state = final_state.policy_state
+		
+		# policy_state = final_state.policy_state
 
-		xs = policy_state.x
-		D = jnp.linalg.norm(xs[None]-xs[:,None], axis=-1)
-		connections = (jnp.abs(policy_state.W) * D).sum()
-		nb_neurons = policy_state.mask.sum()
-		sensors = (jnp.abs(policy_state.s) * policy_state.mask[:,None]).sum()
-		motors = (jnp.abs(policy_state.m) * policy_state.mask[:,None]).sum()
+		# xs = policy_state.x
+		# D = jnp.linalg.norm(xs[None]-xs[:,None], axis=-1)
+		# connections = (jnp.abs(policy_state.W) * D).sum()
+		# nb_neurons = policy_state.mask.sum()
+		# sensors = (jnp.abs(policy_state.s) * policy_state.mask[:,None]).sum()
+		# motors = (jnp.abs(policy_state.m) * policy_state.mask[:,None]).sum()
 
-		connections_penalty = connections * cfg.connection_cost
-		neurons_penalty = nb_neurons * cfg.neuron_cost
-		sensors_penalty = sensors * cfg.sensor_cost
-		motors_penalty = motors * cfg.motor_cost
+		# connections_penalty = connections * cfg.connection_cost
+		# neurons_penalty = nb_neurons * cfg.neuron_cost
+		# sensors_penalty = sensors * cfg.sensor_cost
+		# motors_penalty = motors * cfg.motor_cost
 
-		fitness = fitness - connections_penalty - neurons_penalty - sensors_penalty - motors_penalty
+		# fitness = fitness - connections_penalty - neurons_penalty - sensors_penalty - motors_penalty
 
 		return fitness, bd, data
 
