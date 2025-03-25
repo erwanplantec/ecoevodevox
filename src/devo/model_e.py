@@ -357,14 +357,12 @@ min_prms = lambda prms_like: eqx.tree_at(
     lambda tree: [
         tree.types.theta, 
         tree.types.pi,
-        tree.types.pi_gain,
         tree.types.gamma
     ],
     jax.tree.map(lambda x: jnp.full_like(x, -jnp.inf), prms_like),
     [
         jnp.zeros_like(prms_like.types.theta),
         jnp.zeros_like(prms_like.types.pi),
-        jnp.full_like(prms_like.types.pi_gain, 0.1),
         jnp.full_like(prms_like.types.gamma, 1e-8)
     ]
 )
