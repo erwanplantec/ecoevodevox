@@ -312,13 +312,14 @@ def train(cfg: Config):
 
 	def _plot_train_state(state, key):
 		"""plot the current qd train state"""
-		fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
+		fig, ax = plt.subplots(1, 4, figsize=(16,4), sharey=True)
 		repertoire = state.repertoire
 		fitnesses = repertoire.fitnesses
 		genotypes = repertoire.genotypes
 		mask = ~np.isinf(fitnesses)
 		prms: PyTree = prms_shaper.reshape(genotypes)
 		active_types = prms.types.active.sum(-1)
+		expressed_types = jnp.sum(jnp.round(prms.types.pi * prms.types.active * cfg.N_gain)>0, axis=-1)
 		network_size = np.sum(prms.types.active * prms.types.pi * cfg.N_gain, axis=-1)
 
 		plot_2d_map_elites_repertoire(trainer.centroids, fitnesses, minval=0.0, maxval=1.0, ax=ax[0]) #type:ignore
@@ -326,9 +327,12 @@ def train(cfg: Config):
 		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, active_types, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[1])
 		ax[1].set_title("#types")
 		ax[1].set_ylabel("")
-		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[2])
-		ax[2].set_title("N")
+		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, expressed_types, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[2])
+		ax[2].set_title("e-types")
 		ax[2].set_ylabel("")
+		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[3])
+		ax[3].set_title("N")
+		ax[3].set_ylabel("")
 		fig.tight_layout()
 		if cfg.log: wandb.log(dict(final_result=wandb.Image(fig)))
 		plt.show()
@@ -350,10 +354,12 @@ def train(cfg: Config):
 		prms = prms_shaper.reshape_single(repertoire.genotypes[index])
 		real_bd = np.asarray(repertoire.descriptors[index])
 		centroid = np.asarray(repertoire.centroids[index])
+		expressed_types = (jnp.round(prms.types.pi*prms.types.active*cfg.N_gain )>0).sum()
 		print(f"		fitness={float(fitness):.2f}")
 		print(f"		bd={real_bd}")
 		print(f"		centroid={centroid}")
 		print(f"		active types: {prms.types.active.sum()}")
+		print(f"		expressed types: {expressed_types}")
 
 		fig, ax = plt.subplots(n_seeds, 4, figsize=(16,4*n_seeds))
 		if ax.ndim==1: ax=ax[None]
