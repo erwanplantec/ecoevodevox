@@ -1,5 +1,5 @@
 from .ctrnn import CTRNNPolicy, CTRNNPolicyConfig, CTRNN
-from .model_e import migration_step, morphogen_field, N_MORPHOGENS
+from .model_e import migration_step, migration_field, max_prms, min_prms
 
 import jax
 import jax.numpy as jnp
@@ -57,8 +57,8 @@ min_neuron_prms = lambda n_types, n_morphogens, synaptic_markers: NeuronParams(p
                                                                                gain=ZERO,
                                                                                tau=0.01,
                                                                                bias=-jnp.inf,
-                                                                               m=-ONE,
-                                                                               s=-ONE)
+                                                                               m=-jnp.inf,
+                                                                               s=-jnp.inf)
 
 max_neuron_prms = lambda n_types, n_morphogens, synaptic_markers: NeuronParams(psi=jnp.full(n_morphogens, jnp.inf), 
                                                                                gamma=jnp.inf,
@@ -69,8 +69,8 @@ max_neuron_prms = lambda n_types, n_morphogens, synaptic_markers: NeuronParams(p
                                                                                gain=jnp.inf,
                                                                                tau=10.,
                                                                                bias=jnp.inf,
-                                                                               m=ONE,
-                                                                               s=ONE)
+                                                                               m=jnp.inf,
+                                                                               s=jnp.inf)
 
 sensorimotor_neuron = lambda n_types, n_morphogens, synaptic_markers : NeuronParams(psi=jnp.zeros(n_morphogens), 
                                                                                     gamma=0.9,

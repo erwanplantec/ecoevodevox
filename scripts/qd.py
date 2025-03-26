@@ -112,11 +112,11 @@ def train(cfg: Config):
 		is_on_right_border = xs_x > cfg.motor_neurons_min_norm
 		m = motor_expression(ctrnn.m[:,0])
 		on_left_motor = jnp.where(is_on_left_border, 
-							 	  ctrnn.v*cfg.motor_neurons_force*m, 
+							 	  jnp.clip(ctrnn.v*cfg.motor_neurons_force*m, 0.0, cfg.motor_neurons_force), 
 								  0.0)
 
 		on_right_motor = jnp.where(is_on_right_border, 
-							 	   ctrnn.v*cfg.motor_neurons_force*m, 
+							 	   jnp.clip(ctrnn.v*cfg.motor_neurons_force*m, 0.0, cfg.motor_neurons_force), 
 								   0.0)
 
 		action = jnp.array([on_left_motor.sum(), on_right_motor.sum()])
