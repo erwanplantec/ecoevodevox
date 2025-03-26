@@ -57,6 +57,9 @@ class Config(NamedTuple):
 	synaptic_markers: int=8
 	N_gain: float=100.0
 	conn_model="mlp"
+	T_ctrnn: float=0.1
+	dt_ctrnn: float=0.03
+	act_ctrnn="tanh"
 	# --- mutations ---
 	sigma_mut: float=0.01
 	p_duplicate: float=0.005
@@ -68,6 +71,8 @@ class Config(NamedTuple):
 	iso_sigma: float=0.01
 	line_sigma: float=0.01
 	variation_percentage: float=0.5
+
+activation_fns = dict(tanh=jnn.tanh, sigmoid=jnn.sigmoid, relu=jnn.relu, selu=jnn.selu)
 
 
 def train(cfg: Config):
@@ -128,11 +133,12 @@ def train(cfg: Config):
 		return action
 
 
-	policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn)
+	policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn, dt=cfg.dt_ctrnn, T=cfg.T_ctrnn, 
+		activation_fn=activation_fns[cfg.act_ctrnn])
 	model = Model_E(cfg.max_types, cfg.synaptic_markers, cfg.max_nodes, 
 		sensory_dimensions=1, motor_dimensions=1, temperature_decay=0.98, 
-		extra_migration_fields=3, N_gain=cfg.N_gain, body_shape="square", policy_cfg=policy_cfg,
-		connection_model=cfg.conn_model, key=key_mdl)
+		extra_migration_fields=3, N_gain=cfg.N_gain, body_shape="square", 
+		policy_cfg=policy_cfg, connection_model=cfg.conn_model, key=key_mdl)
 	model = make_single_type(model, 8)
 	
 	prms, sttcs = model.partition()
@@ -282,17 +288,17 @@ def train(cfg: Config):
 	#-------------------------------------------------------------------
 	#-------------------------------------------------------------------
 
-	def _train(state, key):
+	def _train(state, *args, key):
 		"""do multiple training steps"""
-		gens = input("	generations: ")
-		if not gens: 
+		if not args:
+			print("no argument given")
 			return state, 0
-		try: 
-			gens = int(gens)
-		except: 
-			print(f"	gens={gens} cannot be read")
+		try:
+			gens = int(args[0].strip())
+		except:
+			print(f"{args[0]} is not a valid argument")
 			return state, 0
-		trainer.train_steps = int(gens)
+		trainer.train_steps = gens
 		state = jax.block_until_ready(trainer.train_(state, key))
 		return state, gens
 
@@ -319,12 +325,11 @@ def train(cfg: Config):
 		if cfg.log: wandb.log(dict(final_result=wandb.Image(fig)))
 		plt.show()
 
-	def _plot_solution(state, key):
+	def _plot_solution(state, *args, key):
 		"""show one solution of the map"""
-		queried_descriptor = input("	descriptor, [seeds] : ")
-		if not queried_descriptor:
+		queried_descriptor = args
+		if not args:
 			return 
-		queried_descriptor = queried_descriptor.split(",")
 		n_seeds = 1 if len(queried_descriptor)==2 else int(queried_descriptor[-1])
 		bd = jnp.array([float(s) for s in queried_descriptor[:2]])
 		repertoire = state.repertoire
@@ -414,17 +419,19 @@ def train(cfg: Config):
 	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
 
 	while True:
-		command = input("enter command : ")
-		if command in ["t", "train", "0"]:
+		command, *args = input("enter command : ").split(" ")
+		command = command.strip()
+		args = [a.strip() for a in args]
+		if any([command.startswith(c) for c in ["t", "train", "0"]]):
 			key, key_train = jr.split(key)
-			state, steps = _train(state, key_train)
+			state, steps = _train(state, *args, key=key_train)
 			train_steps += steps
 		elif command in ["plot_ts", "pts", "1"] :
 			key, key_plot = jr.split(key)
 			_plot_train_state(state, key_plot)
-		elif command in ["plot_sol", "psol", "2"]:
+		elif any([command.startswith(c) for c in ["plot_sol", "psol", "2"]]):
 			key, key_plot = jr.split(key)
-			_plot_solution(state, key_plot)
+			_plot_solution(state, *args, key=key_plot)
 		elif command in ["anim", "a"]:
 			_make_animation()
 		elif command in ["", "q"]:
