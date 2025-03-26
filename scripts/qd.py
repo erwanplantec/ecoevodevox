@@ -1,6 +1,7 @@
 from functools import partial
 from jax.flatten_util import ravel_pytree
 from jaxtyping import PyTree
+from joblib.parallel import queue
 import realax as rx
 import evosax as ex
 import jax
@@ -21,8 +22,11 @@ from qdax.utils.plotting import plot_2d_map_elites_repertoire
 
 from src.devo.ctrnn import CTRNN, CTRNNPolicyConfig
 from src.devo.model_e import Model_E, make_single_type, mutate, mask_prms, min_prms, max_prms
+from src.utils.viz import render_network
 
 from typing import NamedTuple
+
+
 
 class Config(NamedTuple):
 	# --- training ---
@@ -69,7 +73,7 @@ class Config(NamedTuple):
 def train(cfg: Config):
 
 	key = jr.key(cfg.seed)
-	key_train, key_init, key_mdl = jr.split(key, 3)
+	key, key_init, key_mdl = jr.split(key, 3)
 
 	angle_step = 2*jnp.pi / cfg.lasers
 	laser_angles = jnp.linspace(-jnp.pi, jnp.pi - angle_step, cfg.lasers)
@@ -211,7 +215,14 @@ def train(cfg: Config):
 		sensors_penalty = sensors * cfg.sensor_cost
 		motors_penalty = motors * cfg.motor_cost
 
+		data["base_fitness"] = fitness
+		data["neurons_penalty"] = neurons_penalty
+		data["sensors_penalty"] = sensors_penalty
+		data["motors_penalty"] = motors_penalty
+
 		fitness = fitness - connections_penalty - neurons_penalty - sensors_penalty - motors_penalty
+
+		data["fitness"] = fitness
 
 		return fitness, bd, data
 
@@ -271,28 +282,22 @@ def train(cfg: Config):
 	#-------------------------------------------------------------------
 	#-------------------------------------------------------------------
 
-	k_eval, k_init, k_emit = jr.split(key_init, 3)
-	x_init = prms_shaper.flatten_single(prms)
-	init_genotypes = jax.vmap(_mutation_fn, in_axes=(None,0))(x_init,jr.split(k_init, cfg.batch_size)) #type:ignore
-	init_fitnesses, init_bds, _ = trainer.eval(init_genotypes, k_eval, None)
-	repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
-	emitter_state, _ = trainer.emitter.init(k_emit, repertoire, init_genotypes, init_fitnesses, init_bds, None) #type:ignore
-	state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
-	
-	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
-
-	while True:
-		gens = input("Training generations:")
+	def _train(state, key):
+		"""do multiple training steps"""
+		gens = input("	generations: ")
 		if not gens: 
-			break
+			return state, 0
 		try: 
 			gens = int(gens)
 		except: 
-			continue
+			print(f"	gens={gens} cannot be read")
+			return state, 0
 		trainer.train_steps = int(gens)
-		key_train, key = jr.split(key_train)
 		state = jax.block_until_ready(trainer.train_(state, key))
+		return state, gens
 
+	def _plot_train_state(state, key):
+		"""plot the current qd train state"""
 		fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
 		repertoire = state.repertoire
 		fitnesses = repertoire.fitnesses
@@ -314,15 +319,48 @@ def train(cfg: Config):
 		if cfg.log: wandb.log(dict(final_result=wandb.Image(fig)))
 		plt.show()
 
-	#-------------------------------------------------------------------
+	def _plot_solution(state, key):
+		"""show one solution of the map"""
+		queried_descriptor = input("	descriptor : ")
+		if not queried_descriptor:
+			return 
+		bd = jnp.array([float(s) for s in queried_descriptor.split(",")])
+		repertoire = state.repertoire
+		dists = jnp.sum(jnp.square(bd[None]-repertoire.centroids), axis=-1)
+		index = jnp.argmin(dists ,axis=0)
 
-	if cfg.make_animation=="ask":
-		make_animation=input("make animation ?")
-		make_animation = make_animation in ["y", "Y"]
-	else:
-		make_animation = cfg.make_animation
+		fitness = repertoire.fitnesses[index]
+		if jnp.isinf(fitness):
+			print("unexplored cell"); return
+		prms = prms_shaper.reshape_single(repertoire.genotypes[index])
+		real_bd = np.asarray(repertoire.descriptors[index])
+		centroid = np.asarray(repertoire.centroids[index])
+		print(f"fitness={float(fitness):.2f}")
+		print(f"bd={real_bd}")
+		print(f"centroid={centroid}")
+		print(f"active types: {prms.types.active.sum()}")
+		mdl = mdl_fctry(prms)
+		ctrnn = mdl.initialize(jr.key(1))
 
-	if make_animation:
+		_, _, eval_data = task(prms, jr.key(1))
+		env_states = eval_data["states"]
+		pos = env_states.env_state.robot.posture
+		xs, ys = pos.x, pos.y
+
+		fig, ax = plt.subplots(1, 3, figsize=(15,5))
+		render_network(ctrnn, ax=ax[0])
+		ax[0].set_title(f"bd={bd}")
+		ax[1].scatter(xs, ys, c=jnp.arange(len(xs)))
+		ax[1].set_xlim(0,1)
+		ax[1].set_ylim(0,1)
+		plot_2d_map_elites_repertoire(trainer.centroids, repertoire.fitnesses, minval=0., maxval=1., ax=ax[2])
+		ax[2].scatter(*bd, color="r", s=100.)
+
+		if cfg.log: wandb.log({f"res: {queried_descriptor}": wandb.Image(fig)}, commit=False)
+		
+		plt.show()
+
+	def _make_animation():
 		fig, ax = plt.subplots(1, 3, figsize=(18,6), sharey=True)
 		cam = Camera(fig)
 		max_fitness = max([r.fitnesses.max() for r in repertoires])
@@ -350,13 +388,52 @@ def train(cfg: Config):
 		ani = cam.animate()
 		if cfg.log: wandb.log({"result": wandb.Html(ani.to_html5_video())}, commit=False)
 
+	#-------------------------------------------------------------------
+	#-------------------------------------------------------------------
+	#-------------------------------------------------------------------
+
+
+	k_eval, k_init, k_emit = jr.split(key_init, 3)
+	x_init = prms_shaper.flatten_single(prms)
+	init_genotypes = jax.vmap(_mutation_fn, in_axes=(None,0))(x_init,jr.split(k_init, cfg.batch_size)) #type:ignore
+	init_fitnesses, init_bds, _ = trainer.eval(init_genotypes, k_eval, None)
+	repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
+	emitter_state, _ = trainer.emitter.init(k_emit, repertoire, init_genotypes, init_fitnesses, init_bds, None) #type:ignore
+	state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
+
+	train_steps = 0
+	
+	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
+
+	while True:
+		command = input("enter command : ")
+		if command in ["t", "train", "0"]:
+			key, key_train = jr.split(key)
+			state, steps = _train(state, key_train)
+			train_steps += steps
+		elif command in ["plot_ts", "pts", "1"] :
+			key, key_plot = jr.split(key)
+			_plot_train_state(state, key_plot)
+		elif command in ["plot_sol", "psol", "2"]:
+			key, key_plot = jr.split(key)
+			_plot_solution(state, key_plot)
+		elif command in ["anim", "a"]:
+			_make_animation()
+		elif command in ["", "q"]:
+			break
+		else:
+			print("	unkmown command")
+			continue
+
+
 	if cfg.log: wandb.finish()
 
-	return state
+	utils = (prms_shaper, mdl_fctry, task, trainer)
+	return state, utils
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=16, N_gain=100, p_duplicate=0.01, variation_percentage=0.3, plot_freq=5, variation_mode="cross", log=True)
+	cfg = Config(batch_size=16, N_gain=100, p_duplicate=0.01, variation_percentage=0.3, plot_freq=5, variation_mode="cross", log=False)
 	train(cfg)
 
 
