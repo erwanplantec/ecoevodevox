@@ -78,10 +78,10 @@ def train(cfg: Config):
 		 jnp.cos(laser_angles)[:,None]], axis=-1)
 
 	def sensor_expression(s):
-		return jnn.sigmoid(s*cfg.theta_sensor)
+		return jnp.clip(s, -1., 1.)
 
 	def motor_expression(m):
-		return jnn.sigmoid(m*cfg.theta_motor)
+		return jnp.clip(m, -1, 1.)
 
 	def encode_fn(ctrnn: CTRNN, obs: jax.Array):
 		# ---
