@@ -342,7 +342,7 @@ def add_random_type(model, key):
     order = jnp.argsort(active, descending=True)
     types = model.types._replace(active=active)
     types = jax.tree.map(lambda x: x[order], types)
-    return eqx.tree_at(lambda mdl: mdl.types.active, model, active)
+    return eqx.tree_at(lambda mdl: mdl.types, model, types)
 
 def remove_type(model, key):
     active = model.types.active
