@@ -45,8 +45,8 @@ class Config(NamedTuple):
 	sensor_neurons_min_norm: float=0.8
 	motor_neurons_min_norm: float=0.8
 	motor_neurons_force: float=0.1
-	sensor_threshold: float=0.5
-	motor_threshold: float=0.5
+	theta_sensor: float=2.0
+	theta_motor: float=2.0
 	# --- model ---
 	max_types: int=8
 	max_nodes: int=128
@@ -65,11 +65,6 @@ class Config(NamedTuple):
 	line_sigma: float=0.01
 	variation_percentage: float=0.5
 
-def sensor_expression(s):
-	return jnn.sigmoid(s)
-
-def motor_expression(m):
-	return jnn.sigmoid(m)
 
 def train(cfg: Config):
 
@@ -81,6 +76,12 @@ def train(cfg: Config):
 	laser_positions = jnp.concatenate(
 		[jnp.sin(laser_angles)[:,None],
 		 jnp.cos(laser_angles)[:,None]], axis=-1)
+
+	def sensor_expression(s):
+		return jnn.sigmoid(s*cfg.theta_sensor)
+
+	def motor_expression(m):
+		return jnn.sigmoid(m*cfg.theta_motor)
 
 	def encode_fn(ctrnn: CTRNN, obs: jax.Array):
 		# ---
