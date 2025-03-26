@@ -54,10 +54,10 @@ class Config(NamedTuple):
 	max_nodes: int=128
 	synaptic_markers: int=8
 	N_gain: float=100.0
-	conn_model="mlp"
+	conn_model: str="mlp"
 	T_ctrnn: float=0.1
 	dt_ctrnn: float=0.03
-	act_ctrnn="tanh"
+	act_ctrnn: str="tanh"
 	# --- mutations ---
 	sigma_mut: float=0.01
 	p_duplicate: float=0.005
@@ -244,9 +244,14 @@ def train(cfg: Config):
 		
 		prms = prms_shaper.reshape(genotypes)
 		active_types = prms.types.active.sum(-1).astype(int) #type:ignore
+		expressed_types = jnp.sum(jnp.round(prms.types.pi * prms.types.active * cfg.N_gain)>0, axis=-1) #type:ignore
 
 		nb_types_coverage = {
 			f"{k}-coverage": jnp.where(mask&(active_types==k), 1.0, 0.0).mean()
+		for k in range(1, cfg.max_types+1)}
+
+		nb_etypes_coverage = {
+			f"{k}e-coverage": jnp.where(mask&(expressed_types==k), 1.0, 0.0).mean()
 		for k in range(1, cfg.max_types+1)}
 
 		log_data = dict(
@@ -257,9 +262,11 @@ def train(cfg: Config):
 			qd = jnp.sum(jnp.where(mask, repertoire.fitnesses, 0.0)), #type:ignore
 			avg_active_types=jnp.sum(jnp.where(mask, active_types, 0.0)) / mask.sum(), #type:ignore
 			active_types=jnp.where(mask, active_types, 0.0), #type:ignore
+			expressed_types = jnp.where(mask, expressed_types, 0.0)
 			max_active_types = active_types.max(), #type:ignore
 			network_size = jnp.where(mask, jnp.sum(prms.types.active*prms.types.pi*cfg.N_gain, axis=-1), 0.0), #type:ignore
-			**nb_types_coverage
+			**nb_types_coverage,
+			**nb_etypes_coverage
 		)
 
 		return log_data, None, 0
@@ -269,15 +276,16 @@ def train(cfg: Config):
 	counter = [0]
 
 	def host_transform(data):
-		#data = jax.tree.map(np.asarray, data)
+		data = jax.tree.map(np.asarray, data)
 		counter[0] += 1
 		if not counter[0]%cfg.plot_freq:
 			generations.append(counter[0])
-			repertoires.append(jax.tree.map(np.asarray, data["repertoire"]))
+			repertoires.append(data["repertoire"])
 		del data["repertoire"]
 		mask = ~np.isinf(data["fitnesses"])
 		data["active_types"] = data["active_types"][mask]
 		data["network_size"] = data["network_size"][mask]
+		data["expressed_types"] = data["expressed_types"][mask]
 		data["fitnesses"] = data["fitnesses"][mask]
 		return data
 	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)

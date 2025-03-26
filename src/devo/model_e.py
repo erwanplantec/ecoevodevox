@@ -316,17 +316,16 @@ def duplicate_type(model, key, split_pop=True):
     types = model.types
     n_types = model.types.pi.shape[0]
     k = model.types.active.sum().astype(int)
-    p = jnp.arange(n_types)<k
+    p = (jnp.arange(n_types)<k).astype(float)
     p = p / p.sum()
     i = jr.choice(k1, jnp.arange(n_types), p=p)
     
-    copied_type = jax.tree.map(lambda x:x[i], types)
-    types = jax.tree.map(lambda t, ct: t.at[k].set(ct), types, copied_type)
+    types = jax.tree.map(lambda x: x.at[k].set(x[i]), types)
     
     if split_pop: 
-        p = jr.uniform(k2)
-        pi_i = p * types.pi[i]
-        pi_k = (1-p) * types.pi[i]
+        r = jr.uniform(k2)
+        pi_i = r * types.pi[i]
+        pi_k = (1-r) * types.pi[i]
         pi = types.pi.at[k].set(pi_k)
         pi = pi.at[i].set(pi_i)
         types = eqx.tree_at(lambda types: types.pi, types, pi)
