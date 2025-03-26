@@ -81,7 +81,7 @@ def train(cfg: Config):
 		return jnp.clip(s, -1., 1.)
 
 	def motor_expression(m):
-		return jnp.clip(m, -1, 1.)
+		return jnp.clip(m, -1., 1.)
 
 	def encode_fn(ctrnn: CTRNN, obs: jax.Array):
 		# ---
@@ -203,8 +203,8 @@ def train(cfg: Config):
 		D = jnp.linalg.norm(xs[None]-xs[:,None], axis=-1)
 		connections = (jnp.abs(policy_state.W) * D).sum()
 		nb_neurons = policy_state.mask.sum()
-		sensors = (sensor_expression(policy_state.s[:,0]) * policy_state.mask).sum()
-		motors = (motor_expression(policy_state.m[:,0]) * policy_state.mask).sum()
+		sensors = jnp.sum(jnp.abs(sensor_expression(policy_state.s[:,0]) * policy_state.mask))
+		motors = jnp.sum(jnp.abs(motor_expression(policy_state.m[:,0]) * policy_state.mask))
 
 		connections_penalty = connections * cfg.connection_cost
 		neurons_penalty = nb_neurons * cfg.neuron_cost
