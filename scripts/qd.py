@@ -26,8 +26,6 @@ from src.utils.viz import render_network
 
 from typing import NamedTuple
 
-
-
 class Config(NamedTuple):
 	# --- training ---
 	seed: int=0
@@ -66,6 +64,7 @@ class Config(NamedTuple):
 	p_mut: float=1.0
 	p_rm: float=0.005
 	p_add: float=0.005
+	split_pop: bool=True
 	# --- variation ---
 	variation_mode: str="isoline"
 	iso_sigma: float=0.01
@@ -156,7 +155,8 @@ def train(cfg: Config):
 		p_rm=cfg.p_rm, 
 		p_add=cfg.p_add, 
 		sigma_mut=cfg.sigma_mut,
-		shaper=prms_shaper
+		shaper=prms_shaper,
+		split_pop_duplicate=cfg.split_pop
 	)
 	def mutation_fn(x_batch, key):
 		new_key, key = jr.split(key)

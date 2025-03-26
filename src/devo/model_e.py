@@ -311,24 +311,25 @@ def gridworld_motor_interface(ctrnn: CTRNN, threshold_to_move: float=1.0):
 
 # ========================= EVOLUTION =============================
 
-def duplicate_type(model, key):
+def duplicate_type(model, key, split_pop=True):
     k1, k2 = jr.split(key)
     types = model.types
     n_types = model.types.pi.shape[0]
     k = model.types.active.sum().astype(int)
-    p = jnp.arange(types.psi.shape[0])<k
+    p = jnp.arange(n_types)<k
     p = p / p.sum()
     i = jr.choice(k1, jnp.arange(n_types), p=p)
     
     copied_type = jax.tree.map(lambda x:x[i], types)
     types = jax.tree.map(lambda t, ct: t.at[k].set(ct), types, copied_type)
     
-    p = jr.uniform(k2)
-    pi_i = p * types.pi[i]
-    pi_k = (1-p) * types.pi[i]
-    pi = types.pi.at[k].set(pi_k)
-    pi = pi.at[i].set(pi_i)
-    types = eqx.tree_at(lambda types: types.pi, types, pi)
+    if split_pop: 
+        p = jr.uniform(k2)
+        pi_i = p * types.pi[i]
+        pi_k = (1-p) * types.pi[i]
+        pi = types.pi.at[k].set(pi_k)
+        pi = pi.at[i].set(pi_i)
+        types = eqx.tree_at(lambda types: types.pi, types, pi)
     
     types = eqx.tree_at(lambda types: types.id_, types, jnp.arange(n_types))
     model = eqx.tree_at(lambda m: m.types, model, types)
@@ -386,7 +387,8 @@ def mutate(prms: jax.Array,
            shaper: ex.ParameterReshaper, 
            mutation_mask: jax.Array|None=None, 
            clip_min: jax.Array|None=None, 
-           clip_max: jax.Array|None=None):
+           clip_max: jax.Array|None=None,
+           split_pop_duplicate: bool=True):
 
     # ---
     prms_shaped = shaper.reshape_single(prms)
@@ -399,7 +401,7 @@ def mutate(prms: jax.Array,
     # ---
     
     def _duplicate(prms, key):
-        prms, _ = duplicate_type(prms, key)
+        prms, _ = duplicate_type(prms, key, split_pop=split_pop_duplicate)
         return prms
 
     def _rm(prms, key):
