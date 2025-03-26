@@ -262,7 +262,7 @@ def train(cfg: Config):
 			qd = jnp.sum(jnp.where(mask, repertoire.fitnesses, 0.0)), #type:ignore
 			avg_active_types=jnp.sum(jnp.where(mask, active_types, 0.0)) / mask.sum(), #type:ignore
 			active_types=jnp.where(mask, active_types, 0.0), #type:ignore
-			expressed_types = jnp.where(mask, expressed_types, 0.0)
+			expressed_types = jnp.where(mask, expressed_types, 0.0),
 			max_active_types = active_types.max(), #type:ignore
 			network_size = jnp.where(mask, jnp.sum(prms.types.active*prms.types.pi*cfg.N_gain, axis=-1), 0.0), #type:ignore
 			**nb_types_coverage,
