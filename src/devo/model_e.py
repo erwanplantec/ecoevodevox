@@ -337,7 +337,8 @@ def duplicate_type(model, key):
 
 def add_random_type(model, key):
     active = model.types.active
-    k = jr.choice(key, jnp.arange(active.shape[0]), p=active/active.sum())
+    inactive = 1.0 - active
+    k = jr.choice(key, jnp.arange(active.shape[0]), p=inactive/inactive.sum())
     active = active.at[k].set(1.0)
     order = jnp.argsort(active, descending=True)
     types = model.types._replace(active=active)
