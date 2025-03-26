@@ -321,10 +321,12 @@ def train(cfg: Config):
 
 	def _plot_solution(state, key):
 		"""show one solution of the map"""
-		queried_descriptor = input("	descriptor : ")
+		queried_descriptor = input("	descriptor, [seeds] : ")
 		if not queried_descriptor:
 			return 
-		bd = jnp.array([float(s) for s in queried_descriptor.split(",")])
+		queried_descriptor = queried_descriptor.split(",")
+		n_seeds = 1 if len(queried_descriptor)==2 else int(queried_descriptor[-1])
+		bd = jnp.array([float(s) for s in queried_descriptor[:2]])
 		repertoire = state.repertoire
 		dists = jnp.sum(jnp.square(bd[None]-repertoire.centroids), axis=-1)
 		index = jnp.argmin(dists ,axis=0)
@@ -335,26 +337,32 @@ def train(cfg: Config):
 		prms = prms_shaper.reshape_single(repertoire.genotypes[index])
 		real_bd = np.asarray(repertoire.descriptors[index])
 		centroid = np.asarray(repertoire.centroids[index])
-		print(f"fitness={float(fitness):.2f}")
-		print(f"bd={real_bd}")
-		print(f"centroid={centroid}")
-		print(f"active types: {prms.types.active.sum()}")
-		mdl = mdl_fctry(prms)
-		ctrnn = mdl.initialize(jr.key(1))
+		print(f"		fitness={float(fitness):.2f}")
+		print(f"		bd={real_bd}")
+		print(f"		centroid={centroid}")
+		print(f"		active types: {prms.types.active.sum()}")
 
-		_, _, eval_data = task(prms, jr.key(1))
-		env_states = eval_data["states"]
-		pos = env_states.env_state.robot.posture
-		xs, ys = pos.x, pos.y
+		fig, ax = plt.subplots(n_seeds, 4, figsize=(16,4*n_seeds))
+		if ax.ndim==1: ax=ax[None]
 
-		fig, ax = plt.subplots(1, 3, figsize=(15,5))
-		render_network(ctrnn, ax=ax[0])
-		ax[0].set_title(f"bd={bd}")
-		ax[1].scatter(xs, ys, c=jnp.arange(len(xs)))
-		ax[1].set_xlim(0,1)
-		ax[1].set_ylim(0,1)
-		plot_2d_map_elites_repertoire(trainer.centroids, repertoire.fitnesses, minval=0., maxval=1., ax=ax[2])
-		ax[2].scatter(*bd, color="r", s=100.)
+		for seed in range(n_seeds):
+			key, _key = jr.split(key)
+			_, _, eval_data = task(prms, _key)
+			env_states = eval_data["states"]
+			policy_states = env_states.policy_state
+			pos = env_states.env_state.robot.posture
+			xs, ys = pos.x, pos.y
+			ctrnn = eval_data["final_state"].policy_state
+
+			render_network(ctrnn, ax=ax[seed,0])
+			ax[seed,0].set_title(f"bd={bd}")
+			ax[seed,1].scatter(xs, ys, c=jnp.arange(len(xs)))
+			ax[seed,1].set_xlim(0,1)
+			ax[seed,1].set_ylim(0,1)
+			neuron_msk = ctrnn.mask.astype(bool)
+			ax[seed,2].imshow(policy_states.v[:,neuron_msk].T, aspect="auto", interpolation="none")
+			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.fitnesses, minval=0., maxval=1., ax=ax[seed,3])
+			ax[seed,3].scatter(*bd, color="r", s=50.)
 
 		if cfg.log: wandb.log({f"res: {queried_descriptor}": wandb.Image(fig)}, commit=False)
 		
