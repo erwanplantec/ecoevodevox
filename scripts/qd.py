@@ -110,8 +110,8 @@ def train(cfg: Config):
 		is_sensor = (jnp.abs(sensor_expression(ctrnn)) > 0.) & msk
 		is_motor = (jnp.abs(motor_expression(ctrnn)) > 0.) & msk
 		is_sensorimotor = is_sensor & is_motor
-		is_sensor_only = ~is_motor & is_sensor
-		is_motor_only = ~is_sensor & is_motor
+		is_sensor_only = (~is_motor) & is_sensor
+		is_motor_only = (~is_sensor) & is_motor
 		is_inter = (~(is_sensor|is_motor)) & msk
 		return (is_sensor_only.sum(), is_motor_only.sum(), is_sensorimotor.sum(), is_inter.sum())
 
@@ -137,11 +137,11 @@ def train(cfg: Config):
 		is_on_right_border = xs_x > 0
 		m = motor_expression(ctrnn)
 		on_left_motor = jnp.where(is_on_left_border, 
-							 	  jnp.clip(ctrnn.v*cfg.motor_neurons_force*m, 0.0, cfg.motor_neurons_force), 
+							 	  jnp.clip(ctrnn.v*cfg.motor_neurons_force*m, -cfg.motor_neurons_force, cfg.motor_neurons_force), 
 								  0.0)
 
 		on_right_motor = jnp.where(is_on_right_border, 
-							 	   jnp.clip(ctrnn.v*cfg.motor_neurons_force*m, 0.0, cfg.motor_neurons_force), 
+							 	   jnp.clip(ctrnn.v*cfg.motor_neurons_force*m, -cfg.motor_neurons_force, cfg.motor_neurons_force), 
 								   0.0)
 
 		action = jnp.array([on_left_motor.sum(), on_right_motor.sum()])
@@ -424,13 +424,14 @@ def train(cfg: Config):
 			print(f"			implicit types: s={ss}, m={mss}, sm={sms}, i={ints}")
 
 			render_network(ctrnn, ax=ax[seed,0])
-			ax[seed,0].set_titæe(f"N={ctrnn.mask.sum()}")
+			ax[seed,0].set_title(f"N={int(ctrnn.mask.sum())}")
 			ax[seed,1].scatter(xs, ys, c=jnp.arange(len(xs)))
 			ax[seed,1].set_xlim(0,1)
 			ax[seed,1].set_ylim(0,1)
-			ax[seed,1].set_title(f"bd={seed_bd}")
+			ax[seed,1].set_title(f"bd={np.asarray(seed_bd)}")
 			neuron_msk = ctrnn.mask.astype(bool)
-			ax[seed,2].imshow(policy_states.v[:,neuron_msk].T, aspect="auto", interpolation="none", cmap="coolwarm")
+			vmax = jnp.abs(ctrnn.v).max()
+			ax[seed,2].imshow(policy_states.v[:,neuron_msk].T, aspect="auto", interpolation="none", cmap="coolwarm", vmin=-vmax, vmax=vmax)
 			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.fitnesses, minval=0., maxval=1., ax=ax[seed,3])
 			ax[seed,3].scatter(*seed_bd, color="r", s=20., marker="*")
 			ax[seed,3].scatter(*real_bd, color="r", s=20., marker="s")
