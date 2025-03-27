@@ -1,7 +1,6 @@
 from functools import partial
 from jax.flatten_util import ravel_pytree
 from jaxtyping import PyTree
-from joblib.parallel import queue
 import realax as rx
 import evosax as ex
 import jax
@@ -90,11 +89,29 @@ def train(cfg: Config):
 		[jnp.sin(laser_angles)[:,None],
 		 jnp.cos(laser_angles)[:,None]], axis=-1)
 
-	def sensor_expression(s):
-		return jnp.clip(s*cfg.theta_sensor, -jnp.inf, jnp.inf)
+	def sensor_expression(ctrnn: CTRNN):
+		assert ctrnn.s is not None
+		s = jnp.clip(ctrnn.s[:,0]*cfg.theta_sensor, -jnp.inf, jnp.inf)
+		on_border = jnp.any(jnp.abs(ctrnn.x)>cfg.sensor_neurons_min_norm)
+		s = jnp.where(on_border, s, 0.0)
+		return s
 
-	def motor_expression(m):
-		return jnp.clip(m*cfg.theta_motor, -1., 1.)
+	def motor_expression(ctrnn):
+		assert ctrnn.m is not None
+		m = jnp.clip(ctrnn.m[:,0]*cfg.theta_motor, -1., 1.)
+		on_wheel = jnp.abs(ctrnn.x[:,0]) > cfg.motor_neurons_min_norm
+		m = jnp.where(on_wheel, m, 0.0)
+		return m
+
+	def count_implicit_types(ctrnn):
+		msk = ctrnn.mask > 0.0
+		is_sensor = (jnp.abs(sensor_expression(ctrnn)) > 0.) & msk
+		is_motor = (jnp.abs(motor_expression(ctrnn)) > 0.) & msk
+		is_sensorimotor = is_sensor & is_motor
+		is_sensor_only = is_sensor & (~is_motor)
+		is_motor_only = is_motor & (~is_sensor)
+		is_inter = (~(is_sensor|is_motor)) & msk
+		return (is_sensor_only.sum(), is_motor_only.sum(), is_sensorimotor.sum(), is_inter.sum())
 
 	def encode_fn(ctrnn: CTRNN, obs: jax.Array):
 		# ---
@@ -103,17 +120,10 @@ def train(cfg: Config):
 		laser_values = obs[:cfg.lasers]
 		laser_values = 1.0 - (laser_values/cfg.laser_ranges)
 		xs = ctrnn.x
-		xs_norm = jnp.linalg.norm(xs, axis=-1)
-		is_on_border = xs_norm>cfg.sensor_neurons_min_norm
 		dists = jnp.linalg.norm(xs[:,None] - laser_positions, axis=-1)
 		closest = jnp.argmin(dists, axis=-1)
-		s = sensor_expression(ctrnn.s[:,0])
-		I = jnp.where(
-			is_on_border,
-			laser_values[closest]*s,
-			jnp.zeros_like(ctrnn.v)
-		)
-
+		s = sensor_expression(ctrnn)
+		I =laser_values[closest]*s
 		return I
 
 	def decode_fn(ctrnn: CTRNN):
@@ -121,9 +131,9 @@ def train(cfg: Config):
 		assert ctrnn.m is not None
 		# ---
 		xs_x = ctrnn.x[:,0]
-		is_on_left_border = xs_x < -cfg.motor_neurons_min_norm
-		is_on_right_border = xs_x > cfg.motor_neurons_min_norm
-		m = motor_expression(ctrnn.m[:,0])
+		is_on_left_border = xs_x < 0
+		is_on_right_border = xs_x > 0
+		m = motor_expression(ctrnn)
 		on_left_motor = jnp.where(is_on_left_border, 
 							 	  jnp.clip(ctrnn.v*cfg.motor_neurons_force*m, 0.0, cfg.motor_neurons_force), 
 								  0.0)
@@ -221,8 +231,8 @@ def train(cfg: Config):
 		D = jnp.linalg.norm(xs[None]-xs[:,None], axis=-1)
 		connections = (jnp.abs(policy_state.W) * D).sum()
 		nb_neurons = policy_state.mask.sum()
-		sensors = jnp.sum(jnp.abs(sensor_expression(policy_state.s[:,0]) * policy_state.mask))
-		motors = jnp.sum(jnp.abs(motor_expression(policy_state.m[:,0]) * policy_state.mask))
+		sensors = jnp.sum(jnp.abs(sensor_expression(policy_state) * policy_state.mask))
+		motors = jnp.sum(jnp.abs(motor_expression(policy_state) * policy_state.mask))
 
 		connections_penalty = connections * cfg.connection_cost
 		neurons_penalty = nb_neurons * cfg.neuron_cost
@@ -260,6 +270,18 @@ def train(cfg: Config):
 		active_types = prms.types.active.sum(-1).astype(int) #type:ignore
 		expressed_types = jnp.sum(jnp.round(prms.types.pi * prms.types.active * cfg.N_gain)>0, axis=-1) #type:ignore
 
+		# --- count implicit typees ---
+		ctrnns = data["eval_data"]["final_state"].policy_state #P[,E],N,...
+		if cfg.eval_reps>1:
+			implicit_types_count = jax.vmap(jax.vmap(count_implicit_types, in_axes=0),in_axes=0)(ctrnns)
+			implicit_types_count = jax.tree.map(lambda x: x.mean(1), implicit_types_count)
+			nb_sensors, nb_motors, nb_sensorimotors, nb_inters = implicit_types_count
+		else:
+			implicit_types_count = jax.vmap(count_implicit_types, in_axes=0)(ctrnns)
+			nb_sensors, nb_motors, nb_sensorimotors, nb_inters = implicit_types_count
+		have_inters = (nb_inters > 0).sum() #nb of individuals expressing implicit interneurons
+		# ---
+
 		nb_types_coverage = {
 			f"{k}-coverage": jnp.where(mask&(active_types==k), 1.0, 0.0).mean()
 		for k in range(1, cfg.max_types+1)}
@@ -279,6 +301,11 @@ def train(cfg: Config):
 			expressed_types = jnp.where(mask, expressed_types, 0.0),
 			max_active_types = active_types.max(), #type:ignore
 			network_size = jnp.where(mask, jnp.sum(prms.types.active*prms.types.pi*cfg.N_gain, axis=-1), 0.0), #type:ignore
+			nb_sensors = nb_sensors,
+			nb_motors = nb_motors,
+			nb_sensorimotors = nb_sensorimotors,
+			nb_inters = nb_inters,
+			have_inters=have_inters,
 			**nb_types_coverage,
 			**nb_etypes_coverage
 		)
@@ -361,7 +388,7 @@ def train(cfg: Config):
 		n_seeds = 1 if len(queried_descriptor)==2 else int(queried_descriptor[-1])
 		bd = jnp.array([float(s) for s in queried_descriptor[:2]])
 		repertoire = state.repertoire
-		dists = jnp.sum(jnp.square(bd[None]-repertoire.centroids), axis=-1)
+		dists = jnp.sum(jnp.square(bd[None]-repertoire.descriptors), axis=-1)
 		index = jnp.argmin(dists ,axis=0)
 
 		fitness = repertoire.fitnesses[index]
@@ -388,7 +415,11 @@ def train(cfg: Config):
 			policy_states = env_states.policy_state
 			pos = env_states.env_state.robot.posture
 			xs, ys = pos.x, pos.y
+			seed_bd = (xs[-1], ys[-1])
 			ctrnn = eval_data["final_state"].policy_state
+			implicit_types = count_implicit_types(ctrnn)
+			ss, mss, sms, ints = implicit_types
+			print(f"			implicit types: s={ss}, m={mss}, sm={sms}, i={ints}")
 
 			render_network(ctrnn, ax=ax[seed,0])
 			ax[seed,0].set_title(f"bd={bd}")
@@ -398,7 +429,12 @@ def train(cfg: Config):
 			neuron_msk = ctrnn.mask.astype(bool)
 			ax[seed,2].imshow(policy_states.v[:,neuron_msk].T, aspect="auto", interpolation="none")
 			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.fitnesses, minval=0., maxval=1., ax=ax[seed,3])
-			ax[seed,3].scatter(*bd, color="r", s=50.)
+			ax[seed,3].scatter(*seed_bd, color="k", s=20., marker="*")
+			ax[seed,3].scatter(*real_bd, color="r", s=20., marker="s")
+			ax[seed,3].set_xlabel("")
+			ax[seed,3].set_ylabel("")
+			ax[seed,3].set_title("")
+
 
 		if cfg.log: wandb.log({f"res: {queried_descriptor}": wandb.Image(fig)}, commit=False)
 		
@@ -488,8 +524,8 @@ def train(cfg: Config):
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=8, N_gain=100, algo="mels", eval_reps=3, start_cond="single",
-		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, variation_mode="cross", log=True, 
+	cfg = Config(batch_size=8, N_gain=100, algo="me", eval_reps=2, start_cond="single",
+		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, variation_mode="cross", log=False, 
 		conn_model="xoxt", )
 	train(cfg)
 
