@@ -18,6 +18,7 @@ import wandb
 from qdax.core.emitters.standard_emitters import MixingEmitter
 from qdax.core.emitters.mutation_operators import isoline_variation
 from qdax.core.containers.mapelites_repertoire import MapElitesRepertoire
+from qdax.core.containers.mels_repertoire import MELSRepertoire
 from qdax.utils.plotting import plot_2d_map_elites_repertoire
 
 from src.devo.ctrnn import CTRNN, CTRNNPolicyConfig
@@ -34,6 +35,8 @@ class Config(NamedTuple):
 	grid_shape: tuple=(32,32)
 	plot_freq: int=100
 	make_animation: bool|str="ask"
+	eval_reps: int=1
+	algo: str="map-elites"
 	# --- env ---
 	has_target: bool=False
 	maze: str="standard"
@@ -295,7 +298,9 @@ def train(cfg: Config):
 		return data
 	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)
 
-	trainer = rx.QDTrainer(emitter, task, 1, params_like=prms, bd_minval=0.0, bd_maxval=1.0, grid_shape=cfg.grid_shape, logger=logger) 
+	eval_reps = cfg.eval_reps if cfg.algo != "map-elites" else 1
+	trainer = rx.QDTrainer(emitter, task, 1, params_like=prms, bd_minval=0.0, bd_maxval=1.0, 
+		grid_shape=cfg.grid_shape, logger=logger, eval_reps=eval_reps) 
 	
 	#-------------------------------------------------------------------
 	#-------------------------------------------------------------------
@@ -430,7 +435,14 @@ def train(cfg: Config):
 	x_init = prms_shaper.flatten_single(prms)
 	init_genotypes = jax.vmap(_mutation_fn, in_axes=(None,0))(x_init,jr.split(k_init, cfg.batch_size)) #type:ignore
 	init_fitnesses, init_bds, _ = trainer.eval(init_genotypes, k_eval, None)
-	repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
+	if cfg.algo=="map-elites":
+		repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
+	elif cfg.algo=="mels":
+		repertoire = MELSRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
+	else:
+		print(f"unknown algo {cfg.algo}, defaulting to map-elites")
+		repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
+
 	emitter_state, _ = trainer.emitter.init(k_emit, repertoire, init_genotypes, init_fitnesses, init_bds, None) #type:ignore
 	state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
 
