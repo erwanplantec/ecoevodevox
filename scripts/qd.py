@@ -206,11 +206,11 @@ def train(cfg: Config):
 
 	robot_kwargs = dict(laser_angles=laser_angles, laser_ranges=cfg.laser_ranges)
 
-	_task = rx.KheperaxTask(maze=cfg.maze, model_factory=mdl_fctry, 
+	__task = rx.KheperaxTask(maze=cfg.maze, model_factory=mdl_fctry, 
 		robot_kwargs=robot_kwargs, has_target=cfg.has_target)
 	
-	def task(prms, key, _=None):
-		fitness, data = _task(prms, key)
+	def _task(prms, key, _=None):
+		fitness, data = __task(prms, key) # P[,E],...
 		final_state = data["final_state"]
 		final_pos = final_state.env_state.robot.posture
 		bd = jnp.array([final_pos.x, final_pos.y])
@@ -239,6 +239,12 @@ def train(cfg: Config):
 		data["fitness"] = fitness
 
 		return fitness, bd, data
+
+	if cfg.algo=="mels":
+		assert cfg.eval_reps>1
+		task = lambda prms, key, _=None: jax.vmap(_task, in_axes=(None,0,None), out_axes=(0,0,0))(prms, jr.split(key, cfg.eval_reps), _)
+	else:
+		task = _task
 
 	#-------------------------------------------------------------------
 	#-------------------------------------------------------------------
@@ -298,7 +304,7 @@ def train(cfg: Config):
 		return data
 	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)
 
-	eval_reps = cfg.eval_reps if cfg.algo != "map-elites" else 1
+	eval_reps = 1 if cfg.algo=="mels" else cfg.eval_reps
 	trainer = rx.QDTrainer(emitter, task, 1, params_like=prms, bd_minval=0.0, bd_maxval=1.0, 
 		grid_shape=cfg.grid_shape, logger=logger, eval_reps=eval_reps) 
 	
@@ -435,6 +441,7 @@ def train(cfg: Config):
 	x_init = prms_shaper.flatten_single(prms)
 	init_genotypes = jax.vmap(_mutation_fn, in_axes=(None,0))(x_init,jr.split(k_init, cfg.batch_size)) #type:ignore
 	init_fitnesses, init_bds, _ = trainer.eval(init_genotypes, k_eval, None)
+
 	if cfg.algo=="map-elites":
 		repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	elif cfg.algo=="mels":
@@ -480,7 +487,9 @@ def train(cfg: Config):
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=16, N_gain=100, p_duplicate=0.01, variation_percentage=0.3, plot_freq=5, variation_mode="cross", log=False)
+	cfg = Config(batch_size=8, N_gain=100, algo="mels", eval_reps=3, start_cond="single",
+		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, variation_mode="cross", log=True, 
+		conn_model="xoxt", )
 	train(cfg)
 
 
