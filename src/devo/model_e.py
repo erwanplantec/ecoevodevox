@@ -169,7 +169,7 @@ class Model_E(CTRNNPolicy):
             n_tot += n*msk
         node_type_ids = self.n_types - node_type_ids
         node_type_ids = jnp.where(node_type_ids < self.n_types, node_type_ids, -1).astype(int)
-        node_types = jax.tree.map(lambda x: x[node_type_ids], self.types)
+        node_types = jax.tree.map(lambda x: x[node_type_ids], eqx.tree_at(lambda t:t.id_, self.types, jnp.arange(self.n_types)))
 
         
         # 2. Migrate
