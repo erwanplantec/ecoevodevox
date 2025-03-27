@@ -377,7 +377,7 @@ def train(cfg: Config):
 		ax[3].set_title("N")
 		ax[3].set_ylabel("")
 		fig.tight_layout()
-		if cfg.log: wandb.log(dict(final_result=wandb.Image(fig)))
+		if cfg.log: wandb.log(dict(train_state=wandb.Image(fig)))
 		plt.show()
 
 	def _plot_solution(state, *args, key):
@@ -427,9 +427,9 @@ def train(cfg: Config):
 			ax[seed,1].set_xlim(0,1)
 			ax[seed,1].set_ylim(0,1)
 			neuron_msk = ctrnn.mask.astype(bool)
-			ax[seed,2].imshow(policy_states.v[:,neuron_msk].T, aspect="auto", interpolation="none")
+			ax[seed,2].imshow(policy_states.v[:,neuron_msk].T, aspect="auto", interpolation="none", cmap="coolwarm")
 			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.fitnesses, minval=0., maxval=1., ax=ax[seed,3])
-			ax[seed,3].scatter(*seed_bd, color="k", s=20., marker="*")
+			ax[seed,3].scatter(*seed_bd, color="r", s=20., marker="*")
 			ax[seed,3].scatter(*real_bd, color="r", s=20., marker="s")
 			ax[seed,3].set_xlabel("")
 			ax[seed,3].set_ylabel("")
@@ -466,7 +466,7 @@ def train(cfg: Config):
 
 			cam.snap()
 		ani = cam.animate()
-		if cfg.log: wandb.log({"result": wandb.Html(ani.to_html5_video())}, commit=False)
+		if cfg.log: wandb.log({"anim result": wandb.Html(ani.to_html5_video())}, commit=False)
 
 	#-------------------------------------------------------------------
 	#-------------------------------------------------------------------
