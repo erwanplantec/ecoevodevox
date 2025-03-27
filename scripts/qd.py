@@ -383,7 +383,7 @@ def train(cfg: Config):
 
 		for seed in range(n_seeds):
 			key, _key = jr.split(key)
-			_, _, eval_data = task(prms, _key)
+			_, _, eval_data = _task(prms, _key)
 			env_states = eval_data["states"]
 			policy_states = env_states.policy_state
 			pos = env_states.env_state.robot.posture
@@ -457,13 +457,14 @@ def train(cfg: Config):
 	
 	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
 
+	key, key_train = jr.split(key)
 	while True:
 		command, *args = input("enter command : ").split(" ")
 		command = command.strip()
 		args = [a.strip() for a in args]
 		if any([command.startswith(c) for c in ["t", "train", "0"]]):
-			key, key_train = jr.split(key)
-			state, steps = _train(state, *args, key=key_train)
+			key_train, _key, = jr.split(key_train)
+			state, steps = _train(state, *args, key=_key)
 			train_steps += steps
 		elif command in ["plot_ts", "pts", "1"] :
 			key, key_plot = jr.split(key)
