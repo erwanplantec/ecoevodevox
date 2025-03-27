@@ -47,8 +47,8 @@ class Config(NamedTuple):
 	sensor_neurons_min_norm: float=0.8
 	motor_neurons_min_norm: float=0.8
 	motor_neurons_force: float=0.1
-	theta_sensor: float=2.0
-	theta_motor: float=2.0
+	theta_sensor: float=1.0
+	theta_motor: float=1.0
 	# --- model ---
 	max_types: int=8
 	max_nodes: int=128
@@ -86,10 +86,10 @@ def train(cfg: Config):
 		 jnp.cos(laser_angles)[:,None]], axis=-1)
 
 	def sensor_expression(s):
-		return jnp.clip(s, -1., 1.)
+		return jnp.clip(s*cfg.theta_sensor, -1., 1.)
 
 	def motor_expression(m):
-		return jnp.clip(m, -1., 1.)
+		return jnp.clip(m*cfg.theta_motor, -1., 1.)
 
 	def encode_fn(ctrnn: CTRNN, obs: jax.Array):
 		# ---
@@ -354,12 +354,13 @@ def train(cfg: Config):
 		prms = prms_shaper.reshape_single(repertoire.genotypes[index])
 		real_bd = np.asarray(repertoire.descriptors[index])
 		centroid = np.asarray(repertoire.centroids[index])
-		expressed_types = (jnp.round(prms.types.pi*prms.types.active*cfg.N_gain )>0).sum()
-		print(f"		fitness={float(fitness):.2f}")
-		print(f"		bd={real_bd}")
-		print(f"		centroid={centroid}")
+		expressed_types = (jnp.round(prms.types.pi*prms.types.active*cfg.N_gain)>0).sum()
+		print(f"		fitness: {float(fitness):.2f}")
+		print(f"		bd: {real_bd}")
+		print(f"		centroid: {centroid}")
 		print(f"		active types: {prms.types.active.sum()}")
 		print(f"		expressed types: {expressed_types}")
+		print(f"		types pop: {jnp.round(prms.types.pi*prms.types.active*cfg.N_gain)}")
 
 		fig, ax = plt.subplots(n_seeds, 4, figsize=(16,4*n_seeds))
 		if ax.ndim==1: ax=ax[None]
