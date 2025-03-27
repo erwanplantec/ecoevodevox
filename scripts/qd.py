@@ -21,7 +21,7 @@ from qdax.core.containers.mapelites_repertoire import MapElitesRepertoire
 from qdax.utils.plotting import plot_2d_map_elites_repertoire
 
 from src.devo.ctrnn import CTRNN, CTRNNPolicyConfig
-from src.devo.model_e import Model_E, make_single_type, mutate, mask_prms, min_prms, max_prms
+from src.devo.model_e import Model_E, make_single_type, make_two_types, mutate, mask_prms, min_prms, max_prms
 from src.utils.viz import render_network
 
 from typing import NamedTuple
@@ -58,6 +58,8 @@ class Config(NamedTuple):
 	T_ctrnn: float=0.1
 	dt_ctrnn: float=0.03
 	act_ctrnn: str="tanh"
+	start_cond: str="none"
+	N0: int=8
 	# --- mutations ---
 	sigma_mut: float=0.01
 	p_duplicate: float=0.005
@@ -86,7 +88,7 @@ def train(cfg: Config):
 		 jnp.cos(laser_angles)[:,None]], axis=-1)
 
 	def sensor_expression(s):
-		return jnp.clip(s*cfg.theta_sensor, -1., 1.)
+		return jnp.clip(s*cfg.theta_sensor, -jnp.inf, jnp.inf)
 
 	def motor_expression(m):
 		return jnp.clip(m*cfg.theta_motor, -1., 1.)
@@ -138,7 +140,10 @@ def train(cfg: Config):
 		sensory_dimensions=1, motor_dimensions=1, temperature_decay=0.98, 
 		extra_migration_fields=3, N_gain=cfg.N_gain, body_shape="square", 
 		policy_cfg=policy_cfg, connection_model=cfg.conn_model, key=key_mdl)
-	model = make_single_type(model, 8)
+	if cfg.start_cond=="sm":
+		model = make_single_type(model, cfg.N0)
+	elif cfg.start_cond=="t-m":
+		model = make_two_types(model, cfg.N0, cfg.N0)
 	
 	prms, sttcs = model.partition()
 	prms_shaper = ex.ParameterReshaper(prms)
