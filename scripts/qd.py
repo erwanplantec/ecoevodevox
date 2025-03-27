@@ -49,8 +49,8 @@ class Config(NamedTuple):
 	sensor_neurons_min_norm: float=0.8
 	motor_neurons_min_norm: float=0.8
 	motor_neurons_force: float=0.1
-	theta_sensor: float=1.0
-	theta_motor: float=1.0
+	theta_sensor: float=0.1
+	theta_motor: float=0.1
 	# --- model ---
 	max_types: int=8
 	max_nodes: int=128
@@ -91,16 +91,18 @@ def train(cfg: Config):
 
 	def sensor_expression(ctrnn: CTRNN):
 		assert ctrnn.s is not None
-		s = jnp.clip(ctrnn.s[:,0]*cfg.theta_sensor, -jnp.inf, jnp.inf)
-		on_border = jnp.any(jnp.abs(ctrnn.x)>cfg.sensor_neurons_min_norm)
-		s = jnp.where(on_border, s, 0.0)
+		s = jnp.clip(ctrnn.s[:,0], -jnp.inf, jnp.inf) * ctrnn.mask
+		on_border = jnp.any(jnp.abs(ctrnn.x)>cfg.sensor_neurons_min_norm, axis=-1)
+		above_threshold = jnp.abs(s) > cfg.theta_sensor
+		s = jnp.where(on_border&above_threshold, s, 0.0)
 		return s
 
-	def motor_expression(ctrnn):
+	def motor_expression(ctrnn: CTRNN):
 		assert ctrnn.m is not None
-		m = jnp.clip(ctrnn.m[:,0]*cfg.theta_motor, -1., 1.)
+		m = jnp.clip(ctrnn.m[:,0], -1., 1.) * ctrnn.mask
+		above_threshold = jnp.abs(m) > cfg.theta_motor
 		on_wheel = jnp.abs(ctrnn.x[:,0]) > cfg.motor_neurons_min_norm
-		m = jnp.where(on_wheel, m, 0.0)
+		m = jnp.where(on_wheel&above_threshold, m, 0.0)
 		return m
 
 	def count_implicit_types(ctrnn):
@@ -108,8 +110,8 @@ def train(cfg: Config):
 		is_sensor = (jnp.abs(sensor_expression(ctrnn)) > 0.) & msk
 		is_motor = (jnp.abs(motor_expression(ctrnn)) > 0.) & msk
 		is_sensorimotor = is_sensor & is_motor
-		is_sensor_only = is_sensor & (~is_motor)
-		is_motor_only = is_motor & (~is_sensor)
+		is_sensor_only = ~is_motor & is_sensor
+		is_motor_only = ~is_sensor & is_motor
 		is_inter = (~(is_sensor|is_motor)) & msk
 		return (is_sensor_only.sum(), is_motor_only.sum(), is_sensorimotor.sum(), is_inter.sum())
 
@@ -422,10 +424,11 @@ def train(cfg: Config):
 			print(f"			implicit types: s={ss}, m={mss}, sm={sms}, i={ints}")
 
 			render_network(ctrnn, ax=ax[seed,0])
-			ax[seed,0].set_title(f"bd={bd}")
+			ax[seed,0].set_titæe(f"N={ctrnn.mask.sum()}")
 			ax[seed,1].scatter(xs, ys, c=jnp.arange(len(xs)))
 			ax[seed,1].set_xlim(0,1)
 			ax[seed,1].set_ylim(0,1)
+			ax[seed,1].set_title(f"bd={seed_bd}")
 			neuron_msk = ctrnn.mask.astype(bool)
 			ax[seed,2].imshow(policy_states.v[:,neuron_msk].T, aspect="auto", interpolation="none", cmap="coolwarm")
 			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.fitnesses, minval=0., maxval=1., ax=ax[seed,3])
