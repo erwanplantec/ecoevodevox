@@ -388,6 +388,8 @@ def train(cfg: Config):
 		cols = 4
 		if cfg.algo in "mels greedy-mels ip".split(" "):
 			cols += 1
+		if cfg.algo=="ip":
+			cols += 1
 		fig, ax = plt.subplots(1, cols, figsize=(16,4), sharey=True)
 		repertoire = state.repertoire
 		fitnesses = repertoire.fitnesses
@@ -409,15 +411,15 @@ def train(cfg: Config):
 		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[3])
 		ax[3].set_title("N")
 		ax[3].set_ylabel("")
-		if cfg.algo.endswith("mels"):
+		if cfg.algo.endswith("mels") or cfg.algo=="ip":
 			spreads = np.where(np.isinf(repertoire.spreads), -np.inf, repertoire.spreads)
 			plot_2d_map_elites_repertoire(trainer.centroids, spreads, minval=0.0, maxval=1.0, ax=ax[4])
 			ax[4].set_title("spreads")
 			ax[4].set_ylabel("")
-		elif cfg.algo=="ip":
-			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.scores, minval=0.0, maxval=1.0, ax=ax[4])
-			ax[4].set_title("scores")
-			ax[4].set_ylabel("")
+		if cfg.algo=="ip":
+			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.scores, minval=0.0, maxval=1.0, ax=ax[5])
+			ax[5].set_title("scores")
+			ax[5].set_ylabel("")
 		fig.tight_layout()
 		if cfg.log: wandb.log(dict(train_state=wandb.Image(fig)))
 		plt.show()
