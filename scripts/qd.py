@@ -321,10 +321,14 @@ def train(cfg: Config):
 
 		if cfg.algo=="mels":
 			log_data["spreads"] = repertoire.spreads
+			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0)/mask.sum()
 		elif cfg.algo=="greedy-mels":
 			log_data["spreads"] = repertoire.spreads
+			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0)/mask.sum()
 		elif cfg.algo=="ip":
 			log_data["scores"] = repertoire.scores
+			log_data["spreads"] = repertoire.spreads
+			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0)/mask.sum()
 
 		return log_data, None, 0
 
@@ -349,6 +353,7 @@ def train(cfg: Config):
 		elif cfg.algo=="greedy-mels":
 			data["spreads"] = data["spreads"][mask]
 		elif cfg.algo=="ip":
+			data["spreads"] = data["spreads"][mask]
 			data["scores"] = data["scores"][mask]
 		return data
 	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)
