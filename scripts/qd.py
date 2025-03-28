@@ -23,6 +23,7 @@ from qdax.utils.plotting import plot_2d_map_elites_repertoire
 from src.devo.ctrnn import CTRNN, CTRNNPolicyConfig
 from src.devo.model_e import Model_E, make_single_type, make_two_types, mutate, mask_prms, min_prms, max_prms
 from src.utils.viz import render_network
+from src.evo.qd import GreedyMELSRepertoire
 
 from typing import NamedTuple
 
@@ -485,7 +486,7 @@ def train(cfg: Config):
 	if cfg.algo=="map-elites":
 		repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	elif cfg.algo=="mels":
-		repertoire = MELSRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
+		repertoire = GreedyMELSRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	else:
 		print(f"unknown algo {cfg.algo}, defaulting to map-elites")
 		repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
