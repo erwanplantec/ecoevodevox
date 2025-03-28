@@ -131,7 +131,7 @@ class Model_E(CTRNNPolicy):
             gamma = jnp.zeros((n_types, n_fields))+0.001,
             zeta = jnp.zeros((n_types, n_fields)),
             omega = jnp.zeros((n_types, n_synaptic_markers)),
-            theta = jnp.ones((n_types,2)),
+            theta = jnp.ones((n_types,2)).at[:,0].set(0.01),
             active = jnp.zeros(n_types).at[0].set(1.),
             id_ = jnp.arange(n_types),
             s = jnp.zeros((n_types,sensory_dimensions)),
