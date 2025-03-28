@@ -410,7 +410,8 @@ def train(cfg: Config):
 		ax[3].set_title("N")
 		ax[3].set_ylabel("")
 		if cfg.algo.endswith("mels"):
-			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.spreads, minval=0.0, maxval=1.0, ax=ax[4])
+			spreads = np.where(np.isinf(repertoire.spreads), -np.inf, repertoire.spreads)
+			plot_2d_map_elites_repertoire(trainer.centroids, spreads, minval=0.0, maxval=1.0, ax=ax[4])
 			ax[4].set_title("spreads")
 			ax[4].set_ylabel("")
 		elif cfg.algo=="ip":
@@ -573,7 +574,7 @@ def train(cfg: Config):
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=8, N_gain=100, algo="ip", eval_reps=2, start_cond="single",
+	cfg = Config(batch_size=8, N_gain=100, algo="mels", eval_reps=2, start_cond="single",
 		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, variation_mode="cross", log=False, 
 		conn_model="xoxt", centroids="cvt", n_centroids=512)
 	train(cfg)
