@@ -368,7 +368,10 @@ def train(cfg: Config):
 
 	def _plot_train_state(state, key):
 		"""plot the current qd train state"""
-		fig, ax = plt.subplots(1, 4, figsize=(16,4), sharey=True)
+		cols = 4
+		if cfg.algo in "mels ip".split(" "):
+			cols += 1
+		fig, ax = plt.subplots(1, cols, figsize=(16,4), sharey=True)
 		repertoire = state.repertoire
 		fitnesses = repertoire.fitnesses
 		genotypes = repertoire.genotypes
@@ -389,6 +392,10 @@ def train(cfg: Config):
 		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[3])
 		ax[3].set_title("N")
 		ax[3].set_ylabel("")
+		if cfg.algo=="mels":
+			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.spreads, minval=0.0, maxval=1.0, ax=ax[4])
+		elif cfg.algo=="ip":
+			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.scores, minval=0.0, maxval=1.0, ax=ax[4])
 		fig.tight_layout()
 		if cfg.log: wandb.log(dict(train_state=wandb.Image(fig)))
 		plt.show()
