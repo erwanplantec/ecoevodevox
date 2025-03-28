@@ -321,14 +321,14 @@ def train(cfg: Config):
 
 		if cfg.algo=="mels":
 			log_data["spreads"] = repertoire.spreads
-			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0)/mask.sum()
+			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0).sum()/mask.sum()
 		elif cfg.algo=="greedy-mels":
 			log_data["spreads"] = repertoire.spreads
-			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0)/mask.sum()
+			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0).sum()/mask.sum()
 		elif cfg.algo=="ip":
 			log_data["scores"] = repertoire.scores
 			log_data["spreads"] = repertoire.spreads
-			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0)/mask.sum()
+			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0).sum()/mask.sum()
 
 		return log_data, None, 0
 
