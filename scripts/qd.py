@@ -394,8 +394,12 @@ def train(cfg: Config):
 		ax[3].set_ylabel("")
 		if cfg.algo=="mels":
 			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.spreads, minval=0.0, maxval=1.0, ax=ax[4])
+			ax[4].set_title("spreads")
+			ax[4].set_ylabel("")
 		elif cfg.algo=="ip":
 			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.scores, minval=0.0, maxval=1.0, ax=ax[4])
+			ax[4].set_title("scores")
+			ax[4].set_ylabel("")
 		fig.tight_layout()
 		if cfg.log: wandb.log(dict(train_state=wandb.Image(fig)))
 		plt.show()
