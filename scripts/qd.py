@@ -16,7 +16,7 @@ import wandb
 
 from qdax.core.emitters.standard_emitters import MixingEmitter
 from qdax.core.emitters.mutation_operators import isoline_variation
-from qdax.core.containers.mapelites_repertoire import MapElitesRepertoire
+from qdax.core.containers.mapelites_repertoire import MapElitesRepertoire, compute_cvt_centroids, compute_euclidean_centroids
 from qdax.core.containers.mels_repertoire import MELSRepertoire
 from qdax.utils.plotting import plot_2d_map_elites_repertoire
 
@@ -32,7 +32,9 @@ class Config(NamedTuple):
 	seed: int=0
 	log: bool=True
 	batch_size: int=256
+	centroids: str="grid"
 	grid_shape: tuple=(32,32)
+	n_centroids: int=265
 	plot_freq: int=100
 	make_animation: bool|str="ask"
 	eval_reps: int=1
@@ -334,9 +336,17 @@ def train(cfg: Config):
 		return data
 	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)
 
+	if cfg.centroids=="cvt":
+		key, key_centroids = jr.split(key)
+		centroids, _ = compute_cvt_centroids(2, 2*cfg.n_centroids, cfg.n_centroids, 0.0, 1.0, jr.key_data(key_centroids))
+	elif cfg.centroids=="grid":
+		centroids = compute_euclidean_centroids(cfg.grid_shape, 0.0, 1.0)
+	else:
+		raise ValueError(f"{cfg.centroids} is not a valid")
+
 	eval_reps = 1 if cfg.algo in ("mels", "ip") else cfg.eval_reps
 	trainer = rx.QDTrainer(emitter, task, 1, params_like=prms, bd_minval=0.0, bd_maxval=1.0, 
-		grid_shape=cfg.grid_shape, logger=logger, eval_reps=eval_reps) 
+		centroids=centroids, logger=logger, eval_reps=eval_reps) 
 	
 	#-------------------------------------------------------------------
 	#-------------------------------------------------------------------
@@ -535,7 +545,7 @@ def train(cfg: Config):
 if __name__ == '__main__':
 	cfg = Config(batch_size=8, N_gain=100, algo="ip", eval_reps=2, start_cond="single",
 		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, variation_mode="cross", log=False, 
-		conn_model="xoxt")
+		conn_model="xoxt", centroids="cvt", n_centroids=512)
 	train(cfg)
 
 
