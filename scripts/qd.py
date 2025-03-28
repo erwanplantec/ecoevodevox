@@ -574,7 +574,7 @@ def train(cfg: Config):
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=8, N_gain=100, algo="mels", eval_reps=2, start_cond="single",
+	cfg = Config(batch_size=8, N_gain=100, algo="ip", eval_reps=2, start_cond="single",
 		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, variation_mode="cross", log=False, 
 		conn_model="xoxt", centroids="cvt", n_centroids=512)
 	train(cfg)

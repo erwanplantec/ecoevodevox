@@ -104,6 +104,7 @@ def _compute_scores(bds: jax.Array, s: float):
 class IlluminatePotentialRepertoire(MapElitesRepertoire):
 	
 	scores: jax.Array
+	spreads: jax.Array
 	sigma: float
 	
 	@jax.jit
@@ -135,10 +136,16 @@ class IlluminatePotentialRepertoire(MapElitesRepertoire):
 		batch_of_scores = batch_of_scores.ravel() / num_samples
 		batch_of_descriptors = batch_of_descriptors.reshape((batch_size*num_samples, -1))
 
-		# Compute canonical descriptors as the descriptor of the centroid. Note that this line redefines the earlier batch_of_descriptors.
-		# batch_of_descriptors = jnp.take_along_axis(
-		# 	self.centroids, batch_of_indices, axis=0
-		# )
+		# compute spreads for comparison
+		batch_of_spreads = jax.lax.cond(
+			num_samples == 1,
+			lambda desc: jnp.zeros(batch_size),
+			lambda desc: jax.vmap(_dispersion)(
+				desc.reshape((batch_size, num_samples, -1))
+			),
+			batch_of_descriptors,
+		)
+		batch_of_spreads = jnp.expand_dims(batch_of_spreads, axis=-1).repeat(num_samples, -1).ravel()
 
 		batch_of_fitnesses = batch_of_fitnesses.ravel()
 
@@ -151,6 +158,8 @@ class IlluminatePotentialRepertoire(MapElitesRepertoire):
 
 
 		current_scores = jnp.take_along_axis(self.scores, batch_of_indices, 0)
+
+		current_spreads = jnp.take_along_axis(self.spreads, batch_of_indices, 0)
 
 		# get addition condition
 		addition_condition_fitness = batch_of_fitnesses > current_fitnesses
@@ -188,12 +197,17 @@ class IlluminatePotentialRepertoire(MapElitesRepertoire):
 			batch_of_scores
 		)
 
+		new_spreads = self.spreads.at[batch_of_indices].set(
+			batch_of_spreads
+		)
+
 		return IlluminatePotentialRepertoire(
 			genotypes=new_repertoire_genotypes,
 			fitnesses=new_fitnesses,
 			descriptors=new_descriptors,
 			centroids=self.centroids,
 			scores=new_scores,
+			spreads=new_spreads,
 			sigma=self.sigma
 		)
 
@@ -222,7 +236,9 @@ class IlluminatePotentialRepertoire(MapElitesRepertoire):
 		default_genotypes = jax.tree.map(lambda x: jnp.zeros((num_cells, *x.shape)), genotype)
 		default_descriptors = jnp.zeros_like(centroids)
 		default_scores = jnp.full(num_cells, -jnp.inf)
-		return cls(default_genotypes, default_fitnesses, default_descriptors, centroids, default_scores, sigma)
+		default_spreads = jnp.full(num_cells, -jnp.inf)
+		return cls(default_genotypes, default_fitnesses, default_descriptors, centroids, 
+			default_scores, default_spreads, sigma)
 
 
 
