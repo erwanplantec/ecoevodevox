@@ -2,12 +2,14 @@ import matplotlib.pyplot as plt
 import jax.numpy as jnp
 from sklearn.decomposition import PCA
 
-def render_network(network, ax=None, node_colors=None):
+def render_network(network, ax=None, node_colors=None, wcmap="coolwarm"):
     
     x = network.x
     W = network.W
     mask = network.mask
     id_ = network.id_
+
+    cm = plt.cm.get_cmap(wcmap)
     
     if ax is None:
         fig, ax = plt.subplots(1,1)
@@ -29,7 +31,7 @@ def render_network(network, ax=None, node_colors=None):
             xj, yj = x[j]
             w = W_norm[i,j]
             alpha = min(max(float(w)*0.5, 0), 1.)
-            ax.plot([xi,xj], [yi,yj], color=plt.cm.coolwarm(float(w)), alpha=alpha)#type:ignore
+            ax.plot([xi,xj], [yi,yj], color=cm(float(w)), alpha=alpha)#type:ignore
 
 
 

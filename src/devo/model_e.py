@@ -51,7 +51,9 @@ def migration_step(xs, t, psis, gammas, zetas, mask, thetas, dt=0.01, temperatur
     N, _ = xs.shape
     T = temperature_decay ** t
     k = jnn.sigmoid((t - T_interactions)*10.0)
-    mask = mask * jnn.sigmoid((t-thetas)*10.0)
+    
+    thetas_l, thetas_u = thetas.T
+    mask = mask * jnn.sigmoid((t-thetas_l)*10.0) * jnn.sigmoid((thetas_u-t)*10.0)
 
     M = migration_field
     def M_(x):
@@ -113,7 +115,8 @@ class Model_E(CTRNNPolicy):
     # ---
     def __init__(self, n_types: int, n_synaptic_markers: int, max_nodes: int=32, sensory_dimensions: int=1, 
                  motor_dimensions: int=1, dt: float=0.1, dvpt_time: float=10., temperature_decay: float=1., extra_migration_fields: int=3,
-                 N_gain: float=10.0, policy_cfg: CTRNNPolicyConfig=dummy_policy_config, body_shape: str="square", connection_model: str="xoxt", *, key: jax.Array):
+                 N_gain: float=10.0, policy_cfg: CTRNNPolicyConfig=dummy_policy_config, body_shape: str="square", connection_model: str="xoxt", *,
+                key: jax.Array):
 
         super().__init__(policy_cfg)
         
@@ -128,7 +131,7 @@ class Model_E(CTRNNPolicy):
             gamma = jnp.zeros((n_types, n_fields))+0.001,
             zeta = jnp.zeros((n_types, n_fields)),
             omega = jnp.zeros((n_types, n_synaptic_markers)),
-            theta = jnp.ones(n_types),
+            theta = jnp.ones((n_types,2)),
             active = jnp.zeros(n_types).at[0].set(1.),
             id_ = jnp.arange(n_types),
             s = jnp.zeros((n_types,sensory_dimensions)),
@@ -159,7 +162,7 @@ class Model_E(CTRNNPolicy):
     def initialize(self, key: jax.Array)->CTRNN:
         
         # 1. Initialize neurons
-        x0 = jr.normal(key, (self.max_nodes, 2)) * 0.01
+        x0 = jr.normal(key, (self.max_nodes, 2)) * 0.1
         node_type_ids = jnp.zeros(self.max_nodes)
         n_tot = 0
         pi = self.types.pi * self.types.active
@@ -175,7 +178,7 @@ class Model_E(CTRNNPolicy):
         # 2. Migrate
         step_fn = lambda i, x: migration_step(
             xs=x, t=self.dt*i, psis=node_types.psi, gammas=node_types.gamma, zetas=node_types.zeta, mask=node_types.active, 
-            thetas=node_types.theta, dt=self.dt, temperature_decay=self.temperature_decay, migration_field=self.migration_field, 
+            thetas=node_types.theta*self.dvpt_time, dt=self.dt, temperature_decay=self.temperature_decay, migration_field=self.migration_field, 
             shape=self.body_shape, key=jr.key(1)
         )
         xs = jax.lax.fori_loop(0, int(self.dvpt_time//self.dt), step_fn, x0)
@@ -214,7 +217,7 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
         psi = jnp.array([0.,-1.,0., 0., 0., 1., 0., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0.05, 0., 0.]),
         zeta = jnp.array([0.,0.,0., 0., 0., 1., 0., 0.]),
-        theta = 1.,
+        theta = jnp.array([0.01, 1.0]),
         omega = jnn.one_hot(0, n_synaptic_markers),
         active = 1.,
         s = 1.,
@@ -230,7 +233,7 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
         psi = jnp.array([0.,1.,0., 0., 0., 0., 1., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0., 0.08, 0.]),
         zeta = jnp.array([0.,0.,0., 0., 0., 0., 1., 0.]),
-        theta = 1.,
+        theta = jnp.array([0.01, 1.0]),
         omega = jnn.one_hot(1, n_synaptic_markers),
         active = 1.,
         s = 0.,
@@ -254,7 +257,7 @@ def make_single_type(mdl, n_neurons):
         psi = jnp.array([0.,0.,0., 0., 0., 1., 0., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0.1, 0., 0.]),
         zeta = jnp.array([0.,0.,0., 0., 0., 1., 0., 0.]),
-        theta = 1.,
+        theta = jnp.array([0.01, 1.0]),
         omega = jnn.one_hot(0, n_synaptic_markers),
         active = 1.,
         s = 1.,
@@ -368,7 +371,11 @@ min_prms = lambda prms_like: eqx.tree_at(
     ]
 )
 
-max_prms = lambda prms_like: jax.tree.map(lambda x:jnp.full_like(x, jnp.inf), prms_like)
+max_prms = lambda prms_like: eqx.tree_at(
+    lambda x: x.types.theta,
+    jax.tree.map(lambda x:jnp.full_like(x, jnp.inf), prms_like),
+    jnp.ones_like(prms_like.types.theta)
+)
 
 mask_prms = lambda prms_like: eqx.tree_at(
     lambda tree: [tree.types.id_, tree.types.active],

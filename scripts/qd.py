@@ -431,7 +431,7 @@ def train(cfg: Config):
 			ax[seed,1].set_title(f"bd={np.asarray(seed_bd)}")
 			neuron_msk = ctrnn.mask.astype(bool)
 			vmax = jnp.abs(ctrnn.v).max()
-			ax[seed,2].imshow(policy_states.v[:,neuron_msk].T, aspect="auto", interpolation="none", cmap="coolwarm", vmin=-vmax, vmax=vmax)
+			ax[seed,2].imshow(policy_states.v[:,neuron_msk].T, aspect="auto", interpolation="none", cmap="Spectral_r", vmin=-vmax, vmax=vmax)
 			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.fitnesses, minval=0., maxval=1., ax=ax[seed,3])
 			ax[seed,3].scatter(*seed_bd, color="r", s=20., marker="*")
 			ax[seed,3].scatter(*real_bd, color="r", s=20., marker="s")
@@ -523,7 +523,7 @@ def train(cfg: Config):
 
 	if cfg.log: wandb.finish()
 
-	utils = (prms_shaper, mdl_fctry, task, trainer)
+	utils = (prms_shaper, mdl_fctry, _task, trainer)
 	return state, utils
 
 
