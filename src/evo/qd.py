@@ -132,7 +132,7 @@ class IlluminatePotentialRepertoire(MapElitesRepertoire):
 			),
 			batch_of_descriptors,
 		)
-		batch_of_scores = batch_of_scores.ravel()
+		batch_of_scores = batch_of_scores.ravel() / num_samples
 		batch_of_descriptors = batch_of_descriptors.reshape((batch_size*num_samples, -1))
 
 		# Compute canonical descriptors as the descriptor of the centroid. Note that this line redefines the earlier batch_of_descriptors.
