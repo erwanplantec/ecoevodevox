@@ -83,6 +83,10 @@ activation_fns = dict(tanh=jnn.tanh, sigmoid=jnn.sigmoid, relu=jnn.relu, selu=jn
 
 def train(cfg: Config):
 
+	# ---
+	assert cfg.algo in "map-elites mels greedy-mels ip".split(" ")
+	# ---
+
 	key = jr.key(cfg.seed)
 	key, key_init, key_mdl = jr.split(key, 3)
 
@@ -255,7 +259,7 @@ def train(cfg: Config):
 
 		return fitness, bd, data
 
-	if cfg.algo in ("mels", "ip"):
+	if cfg.algo in ("mels", "ip", "greedy-mels"):
 		assert cfg.eval_reps>1
 		task = lambda prms, key, _=None: jax.vmap(_task, in_axes=(None,0,None), out_axes=(0,0,0))(prms, jr.split(key, cfg.eval_reps), _)
 	else:
@@ -315,6 +319,13 @@ def train(cfg: Config):
 			**nb_etypes_coverage
 		)
 
+		if cfg.algo=="mels":
+			log_data["spreads"] = repertoire.spreads
+		elif cfg.algo=="greedy-mels":
+			log_data["spreads"] = repertoire.spreads
+		elif cfg.algo=="ip":
+			log_data["scores"] = repertoire.scores
+
 		return log_data, None, 0
 
 	repertoires = []
@@ -333,6 +344,12 @@ def train(cfg: Config):
 		data["network_size"] = data["network_size"][mask]
 		data["expressed_types"] = data["expressed_types"][mask]
 		data["fitnesses"] = data["fitnesses"][mask]
+		if cfg.algo=="mels":
+			data["spreads"] = data["spreads"][mask]
+		elif cfg.algo=="greedy-mels":
+			data["spreads"] = data["spreads"][mask]
+		elif cfg.algo=="ip":
+			data["scores"] = data["scores"][mask]
 		return data
 	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)
 
@@ -344,7 +361,7 @@ def train(cfg: Config):
 	else:
 		raise ValueError(f"{cfg.centroids} is not a valid")
 
-	eval_reps = 1 if cfg.algo in ("mels", "ip") else cfg.eval_reps
+	eval_reps = 1 if cfg.algo in ("mels", "ip", "greedy-mels") else cfg.eval_reps
 	trainer = rx.QDTrainer(emitter, task, 1, params_like=prms, bd_minval=0.0, bd_maxval=1.0, 
 		centroids=centroids, logger=logger, eval_reps=eval_reps) 
 	
@@ -369,7 +386,7 @@ def train(cfg: Config):
 	def _plot_train_state(state, key):
 		"""plot the current qd train state"""
 		cols = 4
-		if cfg.algo in "mels ip".split(" "):
+		if cfg.algo in "mels greedy-mels ip".split(" "):
 			cols += 1
 		fig, ax = plt.subplots(1, cols, figsize=(16,4), sharey=True)
 		repertoire = state.repertoire
@@ -392,7 +409,7 @@ def train(cfg: Config):
 		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[3])
 		ax[3].set_title("N")
 		ax[3].set_ylabel("")
-		if cfg.algo=="mels":
+		if cfg.algo.endswith("mels"):
 			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.spreads, minval=0.0, maxval=1.0, ax=ax[4])
 			ax[4].set_title("spreads")
 			ax[4].set_ylabel("")
@@ -507,6 +524,8 @@ def train(cfg: Config):
 	if cfg.algo=="map-elites":
 		repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	elif cfg.algo=="mels":
+		repertoire = MELSRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
+	elif cfg.algo=="greedy-mels":
 		repertoire = GreedyMELSRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	elif cfg.algo=="ip":
 		repertoire = IlluminatePotentialRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
@@ -543,7 +562,7 @@ def train(cfg: Config):
 		elif command in ["", "q"]:
 			break
 		else:
-			print("	unkmown command")
+			print("	unknown command")
 			continue
 
 
