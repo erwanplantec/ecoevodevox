@@ -23,7 +23,7 @@ from qdax.utils.plotting import plot_2d_map_elites_repertoire
 from src.devo.ctrnn import CTRNN, CTRNNPolicyConfig
 from src.devo.model_e import Model_E, make_single_type, make_two_types, mutate, mask_prms, min_prms, max_prms
 from src.utils.viz import render_network
-from src.evo.qd import GreedyMELSRepertoire
+from src.evo.qd import GreedyMELSRepertoire, IlluminatePotentialRepertoire
 
 from typing import NamedTuple
 
@@ -253,7 +253,7 @@ def train(cfg: Config):
 
 		return fitness, bd, data
 
-	if cfg.algo=="mels":
+	if cfg.algo in ("mels", "ip"):
 		assert cfg.eval_reps>1
 		task = lambda prms, key, _=None: jax.vmap(_task, in_axes=(None,0,None), out_axes=(0,0,0))(prms, jr.split(key, cfg.eval_reps), _)
 	else:
@@ -334,7 +334,7 @@ def train(cfg: Config):
 		return data
 	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)
 
-	eval_reps = 1 if cfg.algo=="mels" else cfg.eval_reps
+	eval_reps = 1 if cfg.algo in ("mels", "ip") else cfg.eval_reps
 	trainer = rx.QDTrainer(emitter, task, 1, params_like=prms, bd_minval=0.0, bd_maxval=1.0, 
 		grid_shape=cfg.grid_shape, logger=logger, eval_reps=eval_reps) 
 	
@@ -487,6 +487,8 @@ def train(cfg: Config):
 		repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	elif cfg.algo=="mels":
 		repertoire = GreedyMELSRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
+	elif cfg.algo=="ip":
+		repertoire = IlluminatePotentialRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	else:
 		print(f"unknown algo {cfg.algo}, defaulting to map-elites")
 		repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
@@ -507,6 +509,8 @@ def train(cfg: Config):
 			key_train, _key, = jr.split(key_train)
 			state, steps = _train(state, *args, key=_key)
 			train_steps += steps
+			key, key_plot = jr.split(key)
+			_plot_train_state(state, key_plot)
 		elif command in ["plot_ts", "pts", "1"] :
 			key, key_plot = jr.split(key)
 			_plot_train_state(state, key_plot)
@@ -529,9 +533,9 @@ def train(cfg: Config):
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=8, N_gain=100, algo="mels", eval_reps=2, start_cond="single",
+	cfg = Config(batch_size=8, N_gain=100, algo="ip", eval_reps=2, start_cond="single",
 		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, variation_mode="cross", log=False, 
-		conn_model="xoxt", )
+		conn_model="xoxt")
 	train(cfg)
 
 
