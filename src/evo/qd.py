@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 from qdax.core.containers.mapelites_repertoire import MapElitesRepertoire, get_cells_indices, Centroid
-from qdax.core.containers.mels_repertoire import MELSRepertoire, Genotype, Descriptor, Fitness, ExtraScores, _dispersion
+from qdax.core.containers.mels_repertoire import MELSRepertoire, Genotype, Descriptor, Fitness, ExtraScores, _dispersion, _mode
 
 class GreedyMELSRepertoire(MELSRepertoire):
 	@jax.jit
@@ -95,6 +95,7 @@ class GreedyMELSRepertoire(MELSRepertoire):
 			centroids=self.centroids,
 			spreads=new_spreads,
 		)
+
 
 def _compute_scores(bds: jax.Array, s: float):
 	dists = jnp.linalg.norm(jnp.square(bds[:,None] - bds[None]), axis=-1)
@@ -241,6 +242,82 @@ class IlluminatePotentialRepertoire(MapElitesRepertoire):
 			default_scores, default_spreads, sigma)
 
 
+class MapElitesSamplesRepertoire(MELSRepertoire):
+	@jax.jit
+	def add(
+		self,
+		batch_of_genotypes: Genotype,
+		batch_of_descriptors: Descriptor,
+		batch_of_fitnesses: Fitness,
+		batch_of_extra_scores: ExtraScores|None = None,
+	):
+		batch_size, num_samples, num_descr = batch_of_descriptors.shape
+
+		batch_of_fitnesses = batch_of_fitnesses.mean(1)
+		batch_of_all_indices = get_cells_indices(
+            batch_of_descriptors.reshape(batch_size * num_samples, -1), self.centroids
+        ).reshape((batch_size, num_samples))
+		batch_of_indices = jax.vmap(_mode)(batch_of_all_indices) #P
+		batch_of_descriptors = jnp.take_along_axis(self.centroids, batch_of_indices, 0) #P
+
+		# -- normal map elites---
+
+		batch_of_indices = get_cells_indices(batch_of_descriptors, self.centroids)
+		batch_of_indices = jnp.expand_dims(batch_of_indices, axis=-1)
+		batch_of_fitnesses = jnp.expand_dims(batch_of_fitnesses, axis=-1)
+
+		num_centroids = self.centroids.shape[0]
+
+		# get fitness segment max
+		best_fitnesses = jax.ops.segment_max(
+		    batch_of_fitnesses,
+		    batch_of_indices.astype(jnp.int32).squeeze(axis=-1),
+		    num_segments=num_centroids,
+		)
+
+		cond_values = jnp.take_along_axis(best_fitnesses, batch_of_indices, 0)
+
+		# put dominated fitness to -jnp.inf
+		batch_of_fitnesses = jnp.where(
+		    batch_of_fitnesses == cond_values, batch_of_fitnesses, -jnp.inf
+		)
+
+		# get addition condition
+		repertoire_fitnesses = jnp.expand_dims(self.fitnesses, axis=-1)
+		current_fitnesses = jnp.take_along_axis(
+		    repertoire_fitnesses, batch_of_indices, 0
+		)
+		addition_condition = batch_of_fitnesses > current_fitnesses
+
+		# assign fake position when relevant : num_centroids is out of bound
+		batch_of_indices = jnp.where(
+		    addition_condition, batch_of_indices, num_centroids
+		)
+
+		# create new repertoire
+		# create new repertoire
+		new_repertoire_genotypes = jax.tree_util.tree_map(
+		    lambda repertoire_genotypes, new_genotypes: repertoire_genotypes.at[
+		        batch_of_indices.squeeze(axis=-1)
+		    ].set(new_genotypes),
+		    self.genotypes,
+		    batch_of_genotypes,
+		)
+
+		# compute new fitness and descriptors
+		new_fitnesses = self.fitnesses.at[batch_of_indices.squeeze(axis=-1)].set(
+		    batch_of_fitnesses.squeeze(axis=-1)
+		)
+		new_descriptors = self.descriptors.at[batch_of_indices.squeeze(axis=-1)].set(
+		    batch_of_descriptors
+		)
+
+		return MapElitesRepertoire(
+			genotypes=new_repertoire_genotypes,
+			fitnesses=new_fitnesses,
+			descriptors=new_descriptors,
+			centroids=self.centroids,
+		)
 
 
 if __name__ == '__main__':
@@ -250,7 +327,7 @@ if __name__ == '__main__':
 	bds = jr.uniform(jr.key(3), (100,3,2))
 	centroids = compute_euclidean_centroids((32,32), 0, 1)
 
-	repertoire = IlluminatePotentialRepertoire.init(genotypes, fitness, bds, centroids)
+	repertoire = MapElitesSamplesRepertoire.init(genotypes, fitness, bds, centroids)
 
 
 			
