@@ -261,7 +261,6 @@ def train(cfg: Config):
 		return fitness, bd, data
 
 	if cfg.algo in ("mels", "ip", "greedy-mels", "mes"):
-		assert cfg.eval_reps>1
 		task = lambda prms, key, _=None: jax.vmap(_task, in_axes=(None,0,None), out_axes=(0,0,0))(prms, jr.split(key, cfg.eval_reps), _)
 	else:
 		task = _task
@@ -282,7 +281,7 @@ def train(cfg: Config):
 
 		# --- count implicit typees ---
 		ctrnns = data["eval_data"]["final_state"].policy_state #P[,E],N,...
-		if cfg.eval_reps>1:
+		if cfg.algo in ("mels", "ip", "greedy-mels", "mes"):
 			implicit_types_count = jax.vmap(jax.vmap(count_implicit_types, in_axes=0),in_axes=0)(ctrnns)
 			implicit_types_count = jax.tree.map(lambda x: x.mean(1), implicit_types_count)
 			nb_sensors, nb_motors, nb_sensorimotors, nb_inters = implicit_types_count
@@ -593,7 +592,7 @@ def train(cfg: Config):
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=8, N_gain=100, algo="mes", eval_reps=2, start_cond="single",
+	cfg = Config(batch_size=8, N_gain=100, algo="mes", eval_reps=1, start_cond="single",
 		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, variation_mode="cross", log=False, 
 		conn_model="xoxt", centroids="cvt", n_centroids=512)
 	train(cfg)
