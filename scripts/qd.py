@@ -169,7 +169,7 @@ def train(cfg: Config):
 		model = make_two_types(model, cfg.N0, cfg.N0)
 	
 	prms, sttcs = model.partition()
-	prms_shaper = ex.ParameterReshaper(prms)
+	prms_shaper = ex.ParameterReshaper(prms, n_devices=1, verbose=False)
 	mdl_fctry = lambda prms: eqx.combine(prms, sttcs) 
 	
 	prms_min, _ = ravel_pytree(min_prms(prms)) 
