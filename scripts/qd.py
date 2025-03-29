@@ -69,7 +69,7 @@ class Config(NamedTuple):
 	# --- mutations ---
 	sigma_mut: float=0.01
 	p_duplicate: float=0.005
-	p_mut: float=1.0
+	p_mut: float=1e-5
 	p_rm: float=0.005
 	p_add: float=0.005
 	split_pop: bool=True
@@ -596,7 +596,7 @@ def train(cfg: Config):
 
 if __name__ == '__main__':
 	cfg = Config(batch_size=8, N_gain=100, algo="ip", eval_reps=4, start_cond="single",
-		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, variation_mode="cross", log=False, 
+		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, p_mut=0.01, variation_mode="cross", log=False, 
 		conn_model="xoxt", centroids="cvt", n_centroids=512)
 	train(cfg)
 

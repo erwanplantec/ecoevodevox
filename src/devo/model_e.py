@@ -383,6 +383,27 @@ mask_prms = lambda prms_like: eqx.tree_at(
     [jnp.zeros_like(prms_like.types.id_), jnp.zeros_like(prms_like.types.active)]
 )
 
+prms_sample_min = lambda prms_like: eqx.tree_at(
+    lambda tree: [
+        tree.types.theta, 
+        tree.types.pi,
+        tree.types.gamma
+    ],
+    jax.tree.map(lambda x: jnp.full_like(x, -1.0), prms_like),
+    [
+        jnp.zeros_like(prms_like.types.theta),
+        jnp.zeros_like(prms_like.types.pi),
+        jnp.full_like(prms_like.types.gamma, 1e-8)
+    ]
+)
+
+
+prms_sample_max = lambda prms_like: eqx.tree_at(
+    lambda x: x.types.theta,
+    jax.tree.map(lambda x:jnp.full_like(x, 1.0), prms_like),
+    jnp.ones_like(prms_like.types.theta)
+)
+
 def mutate(prms: jax.Array,
            key: jax.Array, 
            p_duplicate: float, 
@@ -394,6 +415,8 @@ def mutate(prms: jax.Array,
            mutation_mask: jax.Array|None=None, 
            clip_min: jax.Array|None=None, 
            clip_max: jax.Array|None=None,
+           sample_min: jax.Array|None=None,
+           sample_max: jax.Array|None=None,
            split_pop_duplicate: bool=True):
 
     # ---
@@ -404,6 +427,11 @@ def mutate(prms: jax.Array,
         clip_max, _ = ravel_pytree(max_prms(prms_shaped))
     if mutation_mask is None:
         mutation_mask, _ = ravel_pytree(mask_prms(prms_shaped))
+    if sample_min is None:
+        sample_min, _ = ravel_pytree(prms_sample_min(prms_shaped))
+    if sample_max is None:
+        sample_max, _ = ravel_pytree(prms_sample_max(prms_shaped))
+
     # ---
     
     def _duplicate(prms, key):
@@ -416,11 +444,16 @@ def mutate(prms: jax.Array,
     def _add(prms, key):
         return add_random_type(prms, key)
         
+    def _point_mut(prms, key):
+        k1, k2 = jr.split(key)
+        muts = jr.uniform(k1, prms.shape, minval=sample_min, maxval=sample_max)
+        locs = jr.bernoulli(k2, p=p_mut*mutation_mask, shape=prms.shape)
+        mut_prms = jnp.where(locs, muts, prms)
+        return mut_prms
 
     def _mutate(prms, key):
-        k1, k2 = jr.split(key)
-        mut_locs = jr.bernoulli(k1, p_mut, prms.shape).astype(float)
-        epsilon = jr.normal(k2, prms.shape) * sigma_mut * mutation_mask * mut_locs 
+        # small perturb
+        epsilon = jr.normal(key, prms.shape) * sigma_mut * mutation_mask
         prms = prms + epsilon
         prms = jnp.clip(prms, clip_min, clip_max)
         return prms
@@ -428,34 +461,41 @@ def mutate(prms: jax.Array,
 
     key, k1, k2 = jr.split(key, 3)
 
-    prms_shaped = jax.lax.cond(
-        jr.uniform(k1)<p_duplicate,
-        lambda prms, key: _duplicate(prms, key),
-        lambda prms, key: prms,
-        prms_shaped, k2
-    )
+    if p_duplicate > 0.0:
+        prms_shaped = jax.lax.cond(
+            jr.uniform(k1)<p_duplicate,
+            lambda prms, key: _duplicate(prms, key),
+            lambda prms, key: prms,
+            prms_shaped, k2
+        )
 
     key, k1, k2 = jr.split(key, 3)
 
-    prms_shaped = jax.lax.cond(
-        jr.uniform(k1)<p_rm,
-        lambda prms, key: _rm(prms, key),
-        lambda prms, key: prms,
-        prms_shaped, k2
-    )
+    if p_rm > 0.0:
+        prms_shaped = jax.lax.cond(
+            jr.uniform(k1)<p_rm,
+            lambda prms, key: _rm(prms, key),
+            lambda prms, key: prms,
+            prms_shaped, k2
+        )
 
     key, k1, k2 = jr.split(key, 3)
 
-    prms_shaped = jax.lax.cond(
-        jr.uniform(k1)<p_add,
-        lambda prms, key: _add(prms, key),
-        lambda prms, key: prms,
-        prms_shaped, k2
-    )
-
+    if p_add > 0.0:
+        prms_shaped = jax.lax.cond(
+            jr.uniform(k1)<p_add,
+            lambda prms, key: _add(prms, key),
+            lambda prms, key: prms,
+            prms_shaped, k2
+        )
 
     prms = shaper.flatten_single(prms_shaped) #type:ignore
-    prms = _mutate(prms, key)
+
+    k1, k2 = jr.split(key)
+    if p_mut > 0.0:
+        prms = _point_mut(prms, k1) #type:ignore
+    if sigma_mut > 0.0:
+        prms = _mutate(prms, k2)
     
     return prms
 
