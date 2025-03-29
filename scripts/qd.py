@@ -374,8 +374,9 @@ def train(cfg: Config):
 		raise ValueError(f"{cfg.centroids} is not a valid")
 
 	eval_reps = 1 if cfg.algo in ("mels", "ip", "greedy-mels", "mes") else cfg.eval_reps
+	n_devices = jax.device_count()
 	trainer = rx.QDTrainer(emitter, task, 1, params_like=prms, bd_minval=0.0, bd_maxval=1.0, 
-		centroids=centroids, logger=logger, eval_reps=eval_reps) 
+		centroids=centroids, logger=logger, eval_reps=eval_reps, n_devices=n_devices) 
 	
 	#-------------------------------------------------------------------
 	#-------------------------------------------------------------------
