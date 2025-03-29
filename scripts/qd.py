@@ -315,6 +315,10 @@ def train(cfg: Config):
 			nb_sensorimotors = nb_sensorimotors,
 			nb_inters = nb_inters,
 			have_inters=have_inters,
+			avg_nb_sensors = jnp.mean(nb_sensors),
+			avg_nb_motors = jnp.mean(nb_motors),
+			avg_nb_sensorimotors = jnp.mean(nb_sensorimotors),
+			avg_nb_inters = jnp.mean(nb_inters),
 			**nb_types_coverage,
 			**nb_etypes_coverage
 		)
@@ -330,8 +334,7 @@ def train(cfg: Config):
 			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0).sum()/mask.sum()
 		elif cfg.algo=="ip":
 			log_data["scores"] = repertoire.scores
-			log_data["spreads"] = repertoire.spreads
-			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0).sum()/mask.sum()
+			log_data["robustness-diversity"] = jnp.sum(jnp.where(mask, repertoire.scores, 0.0)) #type:ignore
 
 		return log_data, None, 0
 
@@ -358,7 +361,6 @@ def train(cfg: Config):
 		elif cfg.algo=="greedy-mels":
 			data["spreads"] = data["spreads"][mask]
 		elif cfg.algo=="ip":
-			data["spreads"] = data["spreads"][mask]
 			data["scores"] = data["scores"][mask]
 		return data
 	logger = rx.Logger(cfg.log, metrics_fn=metrics_fn, host_log_transform=host_transform)
@@ -398,8 +400,6 @@ def train(cfg: Config):
 		cols = 4
 		if cfg.algo in "mels greedy-mels ip mes".split(" "):
 			cols += 1
-		if cfg.algo=="ip":
-			cols += 1
 		fig, ax = plt.subplots(1, cols, figsize=(16,4), sharey=True)
 		repertoire = state.repertoire
 		fitnesses = repertoire.fitnesses
@@ -421,15 +421,15 @@ def train(cfg: Config):
 		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[3])
 		ax[3].set_title("N")
 		ax[3].set_ylabel("")
-		if cfg.algo in "mels greedy-mels ip mes".split(" "):
+		if cfg.algo in "mels greedy-mels mes".split(" "):
 			spreads = np.where(np.isinf(repertoire.spreads), -np.inf, repertoire.spreads)
 			plot_2d_map_elites_repertoire(trainer.centroids, spreads, minval=0.0, maxval=1.0, ax=ax[4])
 			ax[4].set_title("spreads")
 			ax[4].set_ylabel("")
-		if cfg.algo=="ip":
-			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.scores, minval=0.0, maxval=1.0, ax=ax[5])
-			ax[5].set_title("scores")
-			ax[5].set_ylabel("")
+		elif cfg.algo=="ip":
+			plot_2d_map_elites_repertoire(trainer.centroids, repertoire.scores, minval=0.0, maxval=1.0, ax=ax[4])
+			ax[4].set_title("scores")
+			ax[4].set_ylabel("")
 		fig.tight_layout()
 		if cfg.log: wandb.log(dict(train_state=wandb.Image(fig)))
 		plt.show()
@@ -458,9 +458,12 @@ def train(cfg: Config):
 		print(f"		active types: {prms.types.active.sum()}")
 		print(f"		expressed types: {expressed_types}")
 		print(f"		types pop: {jnp.round(prms.types.pi*prms.types.active*cfg.N_gain)}")
-		if cfg.algo in  "mels greedy-mels ip mes".split(" "):
+		if cfg.algo in  "mels greedy-mels mes".split(" "):
 			spread = np.asarray(repertoire.spreads[index])
 			print(f"		spread: {spread}")
+		elif cfg.algo=="ip":
+			score = np.asarray(repertoire.scores[index])
+			print(f"		score: {score}")
 
 		fig, ax = plt.subplots(n_seeds, 4, figsize=(16,4*n_seeds))
 		if ax.ndim==1: ax=ax[None]
@@ -592,7 +595,7 @@ def train(cfg: Config):
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=8, N_gain=100, algo="mes", eval_reps=1, start_cond="single",
+	cfg = Config(batch_size=8, N_gain=100, algo="ip", eval_reps=4, start_cond="single",
 		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, variation_mode="cross", log=False, 
 		conn_model="xoxt", centroids="cvt", n_centroids=512)
 	train(cfg)

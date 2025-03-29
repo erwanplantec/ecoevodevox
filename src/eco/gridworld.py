@@ -266,6 +266,8 @@ class GridWorld:
 			parents_prms = agents.prms[parents_buffer_id]
 			is_free, childs_buffer_id = jax.lax.top_k(free_buffer_spots, self.birth_pool_size)
 			childs_mask = parents_mask & is_free #is a child if parent was actually reproducing and there are free buffer spots
+			childs_buffer_id = jnp.where(childs_mask, childs_buffer_id, self.max_agents) # assign wrong index if not born
+			parents_buffer_id = jnp.where(childs_mask, parents_buffer_id, self.max_agents)
 
 			childs_alive = childs_mask
 			childs_prms = jax.vmap(self.mutation_fn)(parents_prms, jr.split(key_mut, self.birth_pool_size))
@@ -273,51 +275,34 @@ class GridWorld:
 			childs_energy = jnp.full(self.birth_pool_size, self.initial_agent_energy, dtype=f16)
 			childs_positions = agents.position[parents_buffer_id]
 
-			agents_alive = agents.alive.at[childs_buffer_id].set(
-				jnp.where(childs_mask, childs_alive, agents.alive[childs_buffer_id])
-			) #make sur to not overwrite occupied buffer ids (if more reproducers than free buffer spots)
+			agents_alive = agents.alive.at[childs_buffer_id].set(childs_alive) #make sur to not overwrite occupied buffer ids (if more reproducers than free buffer spots)
 			
-			agents_prms = agents.prms.at[childs_buffer_id].set(
-				jnp.where(childs_mask[:,None], childs_prms, agents.prms[childs_buffer_id])
-			)
+			agents_prms = agents.prms.at[childs_buffer_id].set(childs_prms)
 			
-			agents_policy_states = jax.tree.map(
-				lambda x, cs, os: x.at[childs_buffer_id].set(
-					jnp.where(jnp.expand_dims(childs_mask, [i+1 for i in range(cs.ndim-1)]), cs, os[childs_buffer_id])
-				), 
-				agents.policy_state, childs_policy_states, agents.policy_state
-			)
-			agents_energy = agents.energy.at[childs_buffer_id].set(
-				jnp.where(childs_mask, childs_energy, agents.energy[childs_buffer_id])
-			)
+			agents_policy_states = jax.tree.map(lambda x, c: x.at[childs_buffer_id, c], agents.policy_states, childs_policy_states)
+			agents_energy = agents.energy.at[childs_buffer_id].set(childs_energy)
 			agents_energy = agents_energy.at[parents_buffer_id].add(-self.reproduction_energy_cost * childs_mask)
 			
-			agents_positions = agents.position.at[childs_buffer_id].set(
-				jnp.where(childs_mask[:,None], childs_positions, agents.position[childs_buffer_id])
-			)
+			agents_positions = agents.position.at[childs_buffer_id].set(childs_positions)
 			
 			agents_tat = agents.time_above_threshold
 			agents_tbt = agents.time_below_threshold
-			agents_tat = agents_tat.at[parents_buffer_id].set(jnp.where(childs_mask, 0, agents_tat[parents_buffer_id]))
-			agents_tat = agents_tat.at[childs_buffer_id].set(jnp.where(childs_mask, 0, agents_tat[childs_buffer_id]))
+			agents_tat = agents_tat.at[parents_buffer_id].set(0)
+			agents_tat = agents_tat.at[childs_buffer_id].set(0)
 			
-			agents_tbt = agents_tbt.at[childs_buffer_id].set(jnp.where(childs_mask, 0, agents_tbt[childs_buffer_id]))
+			agents_tbt = agents_tbt.at[childs_buffer_id].set(0)
 
-			agents_age = agents.age.at[childs_buffer_id].set(jnp.where(childs_mask, 0, agents.age[childs_buffer_id]))
+			agents_age = agents.age.at[childs_buffer_id].set(0)
 			agents_age = jnp.where(agents_alive, agents.age+1, 0)
 
-			agents_n_offsprings = agents.n_offsprings.at[childs_buffer_id].set(jnp.where(childs_mask,0,agents.n_offsprings[childs_buffer_id]))
+			agents_n_offsprings = agents.n_offsprings.at[childs_buffer_id].set(0)
 			agents_n_offsprings = agents_n_offsprings.at[parents_buffer_id].add(1)
 
 			childs_ids = jnp.where(childs_mask, jnp.cumsum(childs_mask, dtype=i64)+state.last_agent_id+1, 0)
-			agents_id = agents.id_.at[childs_buffer_id].set(
-				jnp.where(childs_mask, childs_ids, agents.id_[childs_buffer_id]) #type:ignore
-			)
+			agents_id = agents.id_.at[childs_buffer_id].set(childs_ids)
 
 			childs_parent_id = agents.id_[parents_buffer_id]
-			parent_ids = agents.parent_id_.at[childs_buffer_id].set(
-				jnp.where(childs_mask, childs_parent_id, agents.id_[childs_buffer_id])
-			)
+			parent_ids = agents.parent_id_.at[childs_buffer_id].set(childs_parent_id)
 
 			agents = agents._replace(
 				alive=agents_alive, 
@@ -504,7 +489,8 @@ class GridWorld:
 
 
 #=======================================================================
-#								SCENARIOS 
+#								INTERFACE
 #=======================================================================
+
 
 
