@@ -251,14 +251,24 @@ class MapElitesSamplesRepertoire(MELSRepertoire):
 		batch_of_fitnesses: Fitness,
 		batch_of_extra_scores: ExtraScores|None = None,
 	):
+
 		batch_size, num_samples, num_descr = batch_of_descriptors.shape
+
+		batch_of_spreads = jax.lax.cond(
+		    num_samples == 1,
+		    lambda desc: jnp.zeros(batch_size),
+		    lambda desc: jax.vmap(_dispersion)(
+		        desc.reshape((batch_size, num_samples, -1))
+		    ),
+		    batch_of_descriptors,
+		)
 
 		batch_of_fitnesses = batch_of_fitnesses.mean(1)
 		batch_of_all_indices = get_cells_indices(
             batch_of_descriptors.reshape(batch_size * num_samples, -1), self.centroids
         ).reshape((batch_size, num_samples))
 		batch_of_indices = jax.vmap(_mode)(batch_of_all_indices) #P
-		batch_of_descriptors = jnp.take_along_axis(self.centroids, batch_of_indices, 0) #P
+		batch_of_descriptors = self.centroids[batch_of_indices] #P
 
 		# -- normal map elites---
 
@@ -312,11 +322,14 @@ class MapElitesSamplesRepertoire(MELSRepertoire):
 		    batch_of_descriptors
 		)
 
-		return MapElitesRepertoire(
+		new_spreads = self.spreads.at[batch_of_indices.squeeze(axis=-1)].set(batch_of_spreads)
+
+		return MapElitesSamplesRepertoire(
 			genotypes=new_repertoire_genotypes,
 			fitnesses=new_fitnesses,
 			descriptors=new_descriptors,
 			centroids=self.centroids,
+			spreads=new_spreads
 		)
 
 

@@ -1,4 +1,5 @@
 from functools import partial
+from jax.experimental.shard_map import Val
 from jax.flatten_util import ravel_pytree
 from jaxtyping import PyTree
 import realax as rx
@@ -23,7 +24,7 @@ from qdax.utils.plotting import plot_2d_map_elites_repertoire
 from src.devo.ctrnn import CTRNN, CTRNNPolicyConfig
 from src.devo.model_e import Model_E, make_single_type, make_two_types, mutate, mask_prms, min_prms, max_prms
 from src.utils.viz import render_network
-from src.evo.qd import GreedyMELSRepertoire, IlluminatePotentialRepertoire
+from src.evo.qd import GreedyMELSRepertoire, IlluminatePotentialRepertoire, MapElitesSamplesRepertoire
 
 from typing import NamedTuple
 
@@ -84,7 +85,7 @@ activation_fns = dict(tanh=jnn.tanh, sigmoid=jnn.sigmoid, relu=jnn.relu, selu=jn
 def train(cfg: Config):
 
 	# ---
-	assert cfg.algo in "map-elites mels greedy-mels ip".split(" ")
+	assert cfg.algo in "map-elites mels greedy-mels ip mes".split(" ")
 	# ---
 
 	key = jr.key(cfg.seed)
@@ -259,7 +260,7 @@ def train(cfg: Config):
 
 		return fitness, bd, data
 
-	if cfg.algo in ("mels", "ip", "greedy-mels"):
+	if cfg.algo in ("mels", "ip", "greedy-mels", "mes"):
 		assert cfg.eval_reps>1
 		task = lambda prms, key, _=None: jax.vmap(_task, in_axes=(None,0,None), out_axes=(0,0,0))(prms, jr.split(key, cfg.eval_reps), _)
 	else:
@@ -325,6 +326,9 @@ def train(cfg: Config):
 		elif cfg.algo=="greedy-mels":
 			log_data["spreads"] = repertoire.spreads
 			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0).sum()/mask.sum()
+		elif cfg.algo=="mes":
+			log_data["spreads"] = repertoire.spreads
+			log_data["avg spread"] = jnp.where(mask, repertoire.spreads, 0.0).sum()/mask.sum()
 		elif cfg.algo=="ip":
 			log_data["scores"] = repertoire.scores
 			log_data["spreads"] = repertoire.spreads
@@ -350,6 +354,8 @@ def train(cfg: Config):
 		data["fitnesses"] = data["fitnesses"][mask]
 		if cfg.algo=="mels":
 			data["spreads"] = data["spreads"][mask]
+		elif cfg.algo=="mes":
+			data["spreads"] = data["spreads"][mask]
 		elif cfg.algo=="greedy-mels":
 			data["spreads"] = data["spreads"][mask]
 		elif cfg.algo=="ip":
@@ -366,7 +372,7 @@ def train(cfg: Config):
 	else:
 		raise ValueError(f"{cfg.centroids} is not a valid")
 
-	eval_reps = 1 if cfg.algo in ("mels", "ip", "greedy-mels") else cfg.eval_reps
+	eval_reps = 1 if cfg.algo in ("mels", "ip", "greedy-mels", "mes") else cfg.eval_reps
 	trainer = rx.QDTrainer(emitter, task, 1, params_like=prms, bd_minval=0.0, bd_maxval=1.0, 
 		centroids=centroids, logger=logger, eval_reps=eval_reps) 
 	
@@ -391,7 +397,7 @@ def train(cfg: Config):
 	def _plot_train_state(state, key):
 		"""plot the current qd train state"""
 		cols = 4
-		if cfg.algo in "mels greedy-mels ip".split(" "):
+		if cfg.algo in "mels greedy-mels ip mes".split(" "):
 			cols += 1
 		if cfg.algo=="ip":
 			cols += 1
@@ -416,7 +422,7 @@ def train(cfg: Config):
 		plot_2d_map_elites_repertoire(trainer.centroids, np.where(mask, network_size, -jnp.inf), minval=0.0, maxval=1.0, ax=ax[3])
 		ax[3].set_title("N")
 		ax[3].set_ylabel("")
-		if cfg.algo.endswith("mels") or cfg.algo=="ip":
+		if cfg.algo in "mels greedy-mels ip mes".split(" "):
 			spreads = np.where(np.isinf(repertoire.spreads), -np.inf, repertoire.spreads)
 			plot_2d_map_elites_repertoire(trainer.centroids, spreads, minval=0.0, maxval=1.0, ax=ax[4])
 			ax[4].set_title("spreads")
@@ -453,6 +459,9 @@ def train(cfg: Config):
 		print(f"		active types: {prms.types.active.sum()}")
 		print(f"		expressed types: {expressed_types}")
 		print(f"		types pop: {jnp.round(prms.types.pi*prms.types.active*cfg.N_gain)}")
+		if cfg.algo in  "mels greedy-mels ip mes".split(" "):
+			spread = np.asarray(repertoire.spreads[index])
+			print(f"		spread: {spread}")
 
 		fig, ax = plt.subplots(n_seeds, 4, figsize=(16,4*n_seeds))
 		if ax.ndim==1: ax=ax[None]
@@ -531,6 +540,8 @@ def train(cfg: Config):
 
 	if cfg.algo=="map-elites":
 		repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
+	elif cfg.algo=="mes":
+		repertoire = MapElitesSamplesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	elif cfg.algo=="mels":
 		repertoire = MELSRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	elif cfg.algo=="greedy-mels":
@@ -538,19 +549,20 @@ def train(cfg: Config):
 	elif cfg.algo=="ip":
 		repertoire = IlluminatePotentialRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
 	else:
-		print(f"unknown algo {cfg.algo}, defaulting to map-elites")
-		repertoire = MapElitesRepertoire.init(init_genotypes, init_fitnesses, init_bds, trainer.centroids)
+		raise ValueError(f"no algo {cfg.algo}")
 
 	emitter_state, _ = trainer.emitter.init(k_emit, repertoire, init_genotypes, init_fitnesses, init_bds, None) #type:ignore
 	state = rx.training.qd.QDState(repertoire=repertoire, emitter_state=emitter_state)
 
 	train_steps = 0
+
+	# ---- MAIN LOOP ---
 	
 	if cfg.log: wandb.init(project="eedx_qd", config=cfg._asdict())
 
 	key, key_train = jr.split(key)
 	while True:
-		command, *args = input("enter command : ").split(" ")
+		command, *args = input("enter command : ").strip().split(" ")
 		command = command.strip()
 		args = [a.strip() for a in args]
 		if any([command.startswith(c) for c in ["t", "train", "0"]]):
@@ -581,7 +593,7 @@ def train(cfg: Config):
 
 
 if __name__ == '__main__':
-	cfg = Config(batch_size=8, N_gain=100, algo="ip", eval_reps=2, start_cond="single",
+	cfg = Config(batch_size=8, N_gain=100, algo="mes", eval_reps=2, start_cond="single",
 		p_duplicate=0.01, variation_percentage=0.0, sigma_mut=0.1, variation_mode="cross", log=False, 
 		conn_model="xoxt", centroids="cvt", n_centroids=512)
 	train(cfg)
