@@ -279,7 +279,7 @@ class GridWorld:
 			
 			agents_prms = agents.prms.at[childs_buffer_id].set(childs_prms)
 			
-			agents_policy_states = jax.tree.map(lambda x, c: x.at[childs_buffer_id, c], agents.policy_states, childs_policy_states)
+			agents_policy_states = jax.tree.map(lambda x, c: x.at[childs_buffer_id, c], agents.policy_state, childs_policy_states)
 			agents_energy = agents.energy.at[childs_buffer_id].set(childs_energy)
 			agents_energy = agents_energy.at[parents_buffer_id].add(-self.reproduction_energy_cost * childs_mask)
 			

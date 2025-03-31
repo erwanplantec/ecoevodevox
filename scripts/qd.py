@@ -85,7 +85,7 @@ activation_fns = dict(tanh=jnn.tanh, sigmoid=jnn.sigmoid, relu=jnn.relu, selu=jn
 def train(cfg: Config):
 
 	# ---
-	assert cfg.algo in "map-elites mels greedy-mels ip mes".split(" ")
+	assert cfg.algo in "map-elites mels greedy-mels ip mes mome".split(" ")
 	# ---
 
 	key = jr.key(cfg.seed)

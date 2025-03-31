@@ -274,43 +274,68 @@ def make_single_type(mdl, n_neurons):
 
 # ========================= INTERFACE =============================
 
-def gridworld_sensory_interface(obs: Observation, ctrnn: CTRNN, fov: int=1):
+def gridworld_sensory_interface(
+    obs: Observation, 
+    ctrnn: CTRNN, 
+    fov: int=1,
+    sensor_activation: Callable=jnn.tanh):
     # ---
     assert ctrnn.s is not None
     # ---
-    x = ctrnn.x
+    xs = ctrnn.x
+    s = sensor_activation(ctrnn.s)
     # ---
     C = obs.chemicals # mC,W,W
     W = obs.walls
     mC, *_ = C.shape
-    j, i = jnp.round((x*jnp.array([[1,-1]]))*fov+1).astype(int).T
 
-    Ic = jnp.sum(C[:,i,j].T * ctrnn.s[:,:mC], axis=1) # chemical input
-    Iw = W[i,j] * ctrnn.s[:,mC]
-    Ii = jnp.sum(ctrnn.s[:, mC+1:] * obs.internal, axis=1) # internal input
+    coords = xs * jnp.array([[1,-1]], dtype=xs.dtype)
+    coords = jnp.round(coords * fov).astype(jnp.int16)
+    j, i = coords.T
+
+    Ic = jnp.sum(C[:,i,j].T * s[:,:mC], axis=1) # chemical input
+    Iw = W[i,j] * s[:,mC]
+    Ii = jnp.sum(s[:, mC+1:] * obs.internal, axis=1) # internal input
 
     return Ic + Iw + Ii
 
 
-def gridworld_motor_interface(ctrnn: CTRNN, threshold_to_move: float=1.0):
+def gridworld_motor_interface(
+    ctrnn: CTRNN, 
+    threshold_to_move: float=0.1, 
+    border_threshold: float=0.9,
+    force_per_unit_activation: float=1.0,
+    m_activation: Callable=jnn.sigmoid,
+    pos_dtype: type=jnp.int16):
     # ---
     assert ctrnn.m is not None
     # --- 
-    x = ctrnn.x
-    m = ctrnn.m
+    xs = ctrnn.x
+    m = m_activation(ctrnn.m)
     v = ctrnn.v
     # ---
-    mask = jnp.max(jnp.abs(x),axis=-1)>0.5
-    maximum_component = jnn.one_hot(jnp.argmax(jnp.abs(x), axis=-1), 2)
-    x = x*maximum_component
-    effects = jnp.round(x * jnp.array([[-1,1]]))[:,::-1] * mask[:,None]
-    effects = effects * v[:,None] * m[:,None]
-    move = jnp.sum(effects, axis=0)
-    print(move)
-    move = move * (jnp.abs(move).max()>=threshold_to_move)
-    move_rep =  jnp.array([[1,0],[0,1],[-1,0],[0,-1],[0,0]])
-    move_idx = jnp.argmin(jnp.square(move_rep - move[None]).sum(-1))
-    return move_idx
+    xs = xs * jnn.one_hot(jnp.argmax(jnp.abs(xs), axis=-1), 2)
+
+    on_top = xs[:,1] > border_threshold
+    on_bottom = xs[:,1] < - border_threshold
+    on_right = xs[:,0] > border_threshold
+    on_left = xs[:,0] < - border_threshold
+
+    forces = v*m*force_per_unit_activation
+    N_force = jnp.where(on_bottom, forces, 0.0).sum()   #type:ignore
+    S_force = jnp.where(on_top, forces, 0.0).sum()      #type:ignore
+    E_force = jnp.where(on_left, forces, 0.0).sum()     #type:ignore
+    W_force = jnp.where(on_right, forces, 0.0).sum()    #type:ignore
+
+    NSEW_forces = jnp.array([N_force, S_force, E_force, W_force])
+    max_dir = jnp.argmax(NSEW_forces)
+    force = NSEW_forces[max_dir]
+
+    moves = jnp.array([[-1,0],[1,0],[0,1],[0,-1]], dtype=pos_dtype)
+
+    move = jax.lax.select(force>threshold_to_move, moves[max_dir], jnp.zeros(2,dtype=pos_dtype))
+
+    return move
 
 # ========================= EVOLUTION =============================
 
