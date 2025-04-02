@@ -411,7 +411,7 @@ class GridWorld:
 		energy_intake_grid = jnp.clip(eating_agents_grid, 0, jnp.sum(food*self.food_types.energy_concentration[:,None,None], axis=0)) #total qty of consumed energy in each cell
 		energy_intake_per_agent = jnp.where(eating_agents_grid>0, energy_intake_grid/eating_agents_grid, 0)
 		agents_energy_intake = energy_intake_per_agent[agents_i, agents_j]
-		agents_energy = agents.energy + agents_energy_intake
+		agents_energy = jnp.clip(agents.energy + agents_energy_intake, -jnp.inf, self.max_energy)
 
 		agents = agents._replace(energy=agents_energy)
 		food = jnp.clip(food-eating_agents_grid[None], 0, self.food_types.max_concentration[:,None,None])
