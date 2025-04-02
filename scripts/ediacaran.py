@@ -11,6 +11,7 @@ import realax as rx
 from functools import partial
 import wandb
 import matplotlib.pyplot as plt
+import numpy as np
 
 from src.devo.ctrnn import CTRNN
 from src.eco.gridworld import (GridWorld,
@@ -82,8 +83,11 @@ def sensory_expression(
 	ctrnn: CTRNN,
 	sensor_activation: Callable=jnn.tanh,
 	expression_threshold: float=0.03):
+	# --- 
 	assert ctrnn.s is not None
-	s = ctrnn.s
+	assert ctrnn.mask is not None
+	# ---
+	s = ctrnn.s * ctrnn.mask[:,None]
 	s = jnp.where(jnp.abs(s)>expression_threshold, s, 0.0)
 	s = sensor_activation(s) #neurons,ds
 	return s
@@ -121,8 +125,11 @@ def motor_expression(
 	border_threshold: float=0.9,
 	expression_threshold:float=0.03,
 	m_activation: Callable=lambda m: jnp.clip(m, 0.0, 1.0)):
+	# ---
 	assert ctrnn.m is not None
-	m = ctrnn.m
+	assert ctrnn.mask is not None
+	# ---
+	m = ctrnn.m * ctrnn.mask[:,None]
 	m = jnp.where(jnp.abs(m)>expression_threshold, m, 0.0)
 	m = m_activation(m)
 	on_border = jnp.any(jnp.abs(ctrnn.x)>border_threshold, axis=-1)
@@ -204,28 +211,30 @@ def simulate(cfg: Config):
 	motor_dimensions = 1 + int(not cfg.passive_eating) + int(not cfg.passive_reproduction)
 
 	if cfg.mdl=="e":
-		model_fctry = lambda key: Model_E(n_types=cfg.max_types, 
-										  n_synaptic_markers=cfg.n_synaptic_markers,
-										  max_nodes=cfg.max_neurons,
-										  sensory_dimensions=sensory_dimensions,
-										  motor_dimensions=motor_dimensions,
-										  dt=cfg.dt_dev,
-										  dvpt_time=cfg.T_dev,
-										  temperature_decay=cfg.temp_dcay,
-										  extra_migration_fields=cfg.extra_migration_fields,
-										  N_gain=cfg.N_gain,
-										  policy_cfg=interface,
-										  body_shape="square",
-										  key=key)
+		def _fctry(key):
+			model = Model_E(n_types=cfg.max_types, 
+						    n_synaptic_markers=cfg.n_synaptic_markers,
+						    max_nodes=cfg.max_neurons,
+						    sensory_dimensions=sensory_dimensions,
+						    motor_dimensions=motor_dimensions,
+						    dt=cfg.dt_dev,
+						    dvpt_time=cfg.T_dev,
+						    temperature_decay=cfg.temp_dcay,
+						    extra_migration_fields=cfg.extra_migration_fields,
+						    N_gain=cfg.N_gain,
+						    policy_cfg=interface,
+						    body_shape="square",
+						    key=key)
+			model = eqx.tree_at(lambda p: p.types.pi, 
+								model, 
+								model.types.pi.at[0].set(8.0/cfg.N_gain))
+			return model
+		model_factory = _fctry
 	else:
 		raise NameError(f"model {cfg.mdl} is not valid")
 
-	_dummy_model = model_fctry(jr.key(1))
+	_dummy_model = model_factory(jr.key(0))
 	_dummy_prms = eqx.filter(_dummy_model, eqx.is_array)
-	_dummy_prms = eqx.tree_at(
-		lambda p: p.types.pi, 
-		_dummy_prms, 
-		_dummy_prms.types.pi.at[0].set(8.0/cfg.N_gain))
 	prms_shaper = ex.ParameterReshaper(_dummy_prms)
 	agent_apply, agent_init = make_apply_init(_dummy_model)
 
@@ -241,7 +250,7 @@ def simulate(cfg: Config):
 
 	_ravel_pytree = lambda x: ravel_pytree(x)[0]
 	agent_prms_fctry = lambda key: mutation_fn(_ravel_pytree(
-		eqx.filter(model_fctry(key), eqx.is_array)
+		eqx.filter(_dummy_model, eqx.is_array)
 	), key)
 
 	#-------------------------------------------------------------------
@@ -324,7 +333,7 @@ def simulate(cfg: Config):
 			"energy_levels": state.agents.energy,
 			"avg_energy_levels": masked_mean(state.agents.energy, alive) ,
 			# --- NETWORKS
-			"network_sizes": networks.mask.sum(-1),
+			"network_sizes": (networks.mask*alive[:,None]).sum(-1),
 			"avg_network_size": masked_mean(networks.mask.sum(-1), alive),
 			"nb_sensors": nb_sensors,
 			"avg_nb_sensors": masked_mean(nb_sensors, alive),
@@ -342,7 +351,6 @@ def simulate(cfg: Config):
 			"total_food": jnp.sum(state.food),
 			"total_food_coverage": jnp.sum(state.food>0) / (world.size[0]*world.size[1]),
 			**{f"total_food_type_{i}": jnp.sum(food) for i, food in enumerate(state.food)}
-
 		}
 
 		return log_data, {}, 0
@@ -410,6 +418,9 @@ def simulate(cfg: Config):
 			key_sim, _key = jr.split(key_sim)
 			state = simulate_n_steps(state, _key, steps)
 
+		elif cmd=="ss":
+			key_sim, _key = jr.split(key_sim)
+			state = simulation_step(state, _key)
 		elif cmd=="r":
 			fig, ax = plt.subplots()
 			world.render(state, ax=ax) #type:ignore
@@ -436,7 +447,7 @@ if __name__ == '__main__':
 	import matplotlib.pyplot as plt
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
-		birth_pool_size=16, max_neurons=8, wandb_log=True)
+		birth_pool_size=16, max_neurons=8, wandb_log=False)
 	state, tools = simulate(cfg)
 	world = tools["world"]
 	plt.show()
