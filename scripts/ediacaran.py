@@ -330,7 +330,7 @@ def simulate(cfg: Config):
 			# --- AGENTS
 			"alive": alive,
 			"population": alive.sum(),
-			"nb_moved": jnp.sum(~jnp.all(actions == jnp.zeros(2, dtype=actions.dtype)[None], axis=-1)),
+			"nb_moved": jnp.sum(~jnp.all(actions*alive[:,None] == jnp.zeros(2, dtype=actions.dtype)[None], axis=-1)),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"nb_dead": jnp.sum(step_data["dying"]),
 			"energy_levels": state.agents.energy,
@@ -359,7 +359,8 @@ def simulate(cfg: Config):
 		return log_data, {}, 0
 
 	fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
-					  "nb_inters", "active_types", "expressed_types"]
+					  "nb_inters", "active_types", "expressed_types",
+					  "energy_levels"]
 
 	def host_log_transform(data):
 		alive = data["alive"]
