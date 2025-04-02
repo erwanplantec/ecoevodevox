@@ -10,6 +10,7 @@ from jaxtyping import PyTree
 import realax as rx
 from functools import partial
 import wandb
+import matplotlib.pyplot as plt
 
 from src.devo.ctrnn import CTRNN
 from src.eco.gridworld import (GridWorld,
