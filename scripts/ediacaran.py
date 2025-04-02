@@ -45,6 +45,7 @@ class Config(NamedTuple):
 	base_energy_loss: float=0.1
 	time_below_threshold_to_die: int=30
 	time_above_threshold_to_reproduce: int=50
+	max_age: int=200
 	# --- sensor interface
 	fov: int=1
 	sensor_expression_threshold: float=0.03
@@ -285,6 +286,8 @@ def simulate(cfg: Config):
 		predation=False,
 		passive_eating=cfg.passive_eating,
 		passive_reproduction=cfg.passive_reproduction,
+		max_energy=cfg.max_energy,
+		max_age=cfg.max_age,
 		# ---
 		mutation_fn=mutation_fn,
 		birth_pool_size=cfg.birth_pool_size,
