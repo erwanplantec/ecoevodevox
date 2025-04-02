@@ -15,12 +15,14 @@ def make_apply_init(model, apply_method: str="__call__", init_method: str="initi
 	_, shaper = ravel_pytree(prms) #type:ignore
 
 	def apply_fn(prms, *args, **kwargs):
-		mdl = eqx.combine(shaper(prms), sttcs)
+		prms = shaper(prms)
+		mdl = eqx.combine(prms, sttcs)
 		f = getattr(mdl, apply_method)
 		return f(*args, **kwargs)
 
 	def init_fn(prms, *args, **kwargs):
-		mdl = eqx.combine(shaper(prms), sttcs)
+		prms = shaper(prms)
+		mdl = eqx.combine(prms, sttcs)
 		f = getattr(mdl, init_method)
 		return f(*args, **kwargs)
 

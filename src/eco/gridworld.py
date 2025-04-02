@@ -126,7 +126,8 @@ class GridWorld:
 		self.agent_init = agent_init
 		self.agent_apply = agent_apply
 		
-		dummy_policy_state = agent_init(agent_fctry(jr.key(1)), jr.key(1))
+		dummy_agent_prms = agent_fctry(jr.key(1))
+		dummy_policy_state = agent_init(dummy_agent_prms, jr.key(1))
 		self.mapped_agent_fctry = jax.vmap(agent_fctry)
 		if size_init_minibatches is None:
 			self.mapped_agent_init = jax.vmap(lambda prms, key, msk: agent_init(prms, key)) #adds extra input for mask (useless in case of vmap)
@@ -196,12 +197,12 @@ class GridWorld:
 		state = self._apply_actions(state, actions)
 
 		# --- 3. Die / reproduce ---
-		state = self._update_agents(state, key)
+		state, update_agents_data = self._update_agents(state, key)
 
 		state = eqx.tree_at(lambda s: s.agents.age, state, state.agents.age+state.agents.alive)
 		state = state._replace(time=state.time+1)
 
-		return state, dict(state=state, actions=actions, observations=observations)
+		return state, dict(state=state, actions=actions, observations=observations, **update_agents_data)
 
 	# ---
 
@@ -225,31 +226,32 @@ class GridWorld:
 			prms=prms, 
 			energy=jnp.full((self.max_agents), self.initial_agent_energy, dtype=f16)*alive,
 			reproduce=jnp.full((self.max_agents,), False, dtype=bool), 
-			time_above_threshold=jnp.full((self.max_agents,), 0, dtype=i8), 
-			time_below_threshold=jnp.full((self.max_agents,), 0, dtype=i8),
+			time_above_threshold=jnp.full((self.max_agents,), 0, dtype=i16), 
+			time_below_threshold=jnp.full((self.max_agents,), 0, dtype=i16),
 			position=jr.randint(key_pos, (self.max_agents, 2), minval=1, maxval=jnp.array(self.size, dtype=i16)-1, dtype=i16), 
 			policy_state=policy_states, 
 			reward=jnp.zeros((self.max_agents,), dtype=f16), 
 			age=jr.randint(key_age, (self.max_agents,), minval=1, maxval=self.max_age), 
 			n_offsprings=jnp.zeros(self.max_agents, dtype=i16),
 			id_=ids,
-			parent_id_=jnp.zeros(self.max_agents, dtype=i64))
+			parent_id_=jnp.zeros(self.max_agents, dtype=ui32))
 
 	# ---
 
-	def _update_agents(self, state: EnvState, key: jax.Array)->EnvState:
+	def _update_agents(self, state: EnvState, key: jax.Array)->Tuple[EnvState, PyTree]:
 		
 		key_repr, key_mut, key_init = jr.split(key, 3)
 		agents = state.agents
 		below_threshold = agents.energy < 0.
 		above_threshold = agents.energy > self.energy_reproduction_threshold
 		
-		agents_tat = (agents.time_above_threshold + above_threshold) * above_threshold
-		agents_tbt = (agents.time_below_threshold + below_threshold) * below_threshold
+		agents_tat = (agents.time_above_threshold + above_threshold) * above_threshold * agents.alive
+		agents_tbt = (agents.time_below_threshold + below_threshold) * below_threshold * agents.alive
 
 		# --- 1. Death ---
 
 		dead = (agents_tbt > self.time_below_threshold_to_die) | (agents.age > self.max_age)
+		dead = dead & agents.alive
 		agents_alive = agents.alive & ( ~dead )
 		agents = agents._replace(alive=agents_alive, time_above_threshold=agents_tat, time_below_threshold=agents_tbt)
 
@@ -279,7 +281,7 @@ class GridWorld:
 			
 			agents_prms = agents.prms.at[childs_buffer_id].set(childs_prms)
 			
-			agents_policy_states = jax.tree.map(lambda x, c: x.at[childs_buffer_id, c], agents.policy_state, childs_policy_states)
+			agents_policy_states = jax.tree.map(lambda x, c: x.at[childs_buffer_id].set(c), agents.policy_state, childs_policy_states)
 			agents_energy = agents.energy.at[childs_buffer_id].set(childs_energy)
 			agents_energy = agents_energy.at[parents_buffer_id].add(-self.reproduction_energy_cost * childs_mask)
 			
@@ -322,11 +324,17 @@ class GridWorld:
 
 		reproducing = agents.reproduce # N,
 
-		agents = jax.lax.cond(jnp.any(reproducing), _reproduce, lambda _, agents: agents, reproducing, agents)
+		agents = jax.lax.cond(
+			jnp.any(reproducing),
+			_reproduce, 
+			lambda _, agents: agents, 
+			reproducing, agents
+		)
 
 		new_last_id_ = agents.id_.max()
 
-		return state._replace(agents=agents, last_agent_id=new_last_id_)
+		state = state._replace(agents=agents, last_agent_id=new_last_id_)
+		return state, dict(reproducing=reproducing, dying=dead)
 
 	# ---
 
@@ -351,7 +359,7 @@ class GridWorld:
 
 		agents_internal_inputs = jnp.concatenate([agents.energy[:,None], agents.reward[:,None]], axis=-1)
 
-		agents_walls_inputs = jax.vmap(moore_neighborhood, in_axes=(None,0,0))(self.walls[None], agents_i, agents_j)[0]
+		agents_walls_inputs = jax.vmap(moore_neighborhood, in_axes=(None,0,0))(self.walls[None], agents_i, agents_j)
 
 		return Observation(chemicals=agents_chemicals_inputs, internal=agents_internal_inputs, walls=agents_walls_inputs)
 
@@ -359,35 +367,31 @@ class GridWorld:
 
 	def _apply_actions(self, state: EnvState, actions: jax.Array)->EnvState:
 		"""
-		actions are: {0:N, 1:E, 2:S, 3:W, 4:none, 5:eat, 6:reproduce, 7: attack}
 		"""
-		no_move_actions = 1 + int(not self.passive_eating) + int(not self.passive_reproduction) + int(self.predation)
-
-		action_effects = jnp.array([[1,0],[0,1], [-1,0], [0,-1], *[[0,0] for _ in range(no_move_actions)]], dtype=i16)
-
 		agents = state.agents
-		actions = jnp.where(agents.alive, actions, -1)
+		actions = jnp.where(agents.alive[:,None], actions, jnp.zeros(2, dtype=jnp.int16))
+		no_move = jnp.all(actions == jnp.zeros(2, dtype=jnp.int16)[None], axis=-1)
 
-		# --- 1. Predation ---
+		# # --- 1. Predation ---
 
-		if self.predation:
-			attacking = (actions == 7)&(agents.alive)
-			i, j = agents.position.T
-			on_attacking_cell = (jnp.zeros(self.size, dtype=jnp.bool).at[i,j].set(attacking))[i,j]
-			attacked = (~attacking) & (agents.alive) & (on_attacking_cell) 
-			successfull_attacks = attacking & (jnp.zeros(self.size, dtype=jnp.bool).at[i,j].set(attacked))[i,j]
+		# if self.predation:
+		# 	attacking = (actions == 7)&(agents.alive)
+		# 	i, j = agents.position.T
+		# 	on_attacking_cell = (jnp.zeros(self.size, dtype=jnp.bool).at[i,j].set(attacking))[i,j]
+		# 	attacked = (~attacking) & (agents.alive) & (on_attacking_cell) 
+		# 	successfull_attacks = attacking & (jnp.zeros(self.size, dtype=jnp.bool).at[i,j].set(attacked))[i,j]
 
-			agents_alive = jnp.where(attacked, False, agents.alive)
-			agents_energy = jnp.where(attacking, agents.energy-self.predation_energy_cost, agents.energy)
-			agents_energy = jnp.where(successfull_attacks, agents_energy+self.predation_energy_gain, agents_energy)
-			agents = agents._replace(energy=agents_energy, alive=agents_alive)
+		# 	agents_alive = jnp.where(attacked, False, agents.alive)
+		# 	agents_energy = jnp.where(attacking, agents.energy-self.predation_energy_cost, agents.energy)
+		# 	agents_energy = jnp.where(successfull_attacks, agents_energy+self.predation_energy_gain, agents_energy)
+		# 	agents = agents._replace(energy=agents_energy, alive=agents_alive)
 
 		# --- 2. Move ---
-		agents_moves = action_effects[actions]
-		new_positions = agents.position+agents_moves
+
+		new_positions = agents.position+actions
 		hits_wall = self.walls[*new_positions.T].astype(bool) #type:ignore
 		positions = jnp.where(hits_wall[:,None], agents.position, new_positions)
-		energy_loss = (actions < 4) * self.move_energy_cost + jnp.array(self.base_energy_loss, dtype=f16)
+		energy_loss = jnp.where(no_move, self.base_energy_loss, self.base_energy_loss+self.move_energy_cost)
 		agents_energy = jnp.where(agents.alive, agents.energy-energy_loss, 0.0)
 		agents = agents._replace(position=positions, energy=agents_energy)
 

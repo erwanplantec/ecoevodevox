@@ -50,7 +50,7 @@ class CTRNNPolicy(eqx.Module):
     # ---
     def __call__(self, obs: jax.Array, state: CTRNN, key: jax.Array):
         # Encode obs
-        I = self.encode(state, obs)
+        I = self.encode(obs, state)
         # forward network
         forward_fn = lambda i, state: state._replace(
             v=forward_ctrnn(state, I, dt=self.dt, f=self.activation_fn))

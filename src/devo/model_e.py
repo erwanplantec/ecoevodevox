@@ -113,10 +113,22 @@ class Model_E(CTRNNPolicy):
     N_gain: float
     body_shape: str
     # ---
-    def __init__(self, n_types: int, n_synaptic_markers: int, max_nodes: int=32, sensory_dimensions: int=1, 
-                 motor_dimensions: int=1, dt: float=0.1, dvpt_time: float=10., temperature_decay: float=1., extra_migration_fields: int=3,
-                 N_gain: float=10.0, policy_cfg: CTRNNPolicyConfig=dummy_policy_config, body_shape: str="square", connection_model: str="xoxt", *,
-                key: jax.Array):
+    def __init__(self, 
+        n_types: int, 
+        n_synaptic_markers: int, 
+        max_nodes: int=32, 
+        sensory_dimensions: int=1, 
+        motor_dimensions: int=1, 
+        dt: float=0.1, 
+        dvpt_time: float=10., 
+        temperature_decay: float=1., 
+        extra_migration_fields: int=3,
+        N_gain: float=10.0, 
+        policy_cfg: CTRNNPolicyConfig=dummy_policy_config, 
+        body_shape: str="square", 
+        connection_model: str="xoxt", 
+        *,
+        key: jax.Array):
 
         super().__init__(policy_cfg)
         
@@ -166,7 +178,7 @@ class Model_E(CTRNNPolicy):
         node_type_ids = jnp.zeros(self.max_nodes)
         n_tot = 0
         pi = self.types.pi * self.types.active
-        ns = jnp.round(pi * self.N_gain)
+        ns = jnp.ceil(pi * self.N_gain)
         for _, (n, msk) in enumerate(zip(ns, self.types.active)):
             node_type_ids = jnp.where(jnp.arange(self.max_nodes)<n_tot+n*msk, node_type_ids+1, node_type_ids)
             n_tot += n*msk
@@ -190,7 +202,7 @@ class Model_E(CTRNNPolicy):
             return self.migration_field(x) + jnp.sum(node_types.zeta * jnp.exp(-d/(node_types.gamma+1e-6)) * node_types.active[:,None], axis=0)
         
         M = jax.vmap(molecular_field)(xs)
-        g = jax.vmap(self.A)(jnp.concatenate([node_types.omega,M], axis=-1))
+        g = jax.vmap(self.A)(jnp.concatenate([node_types.omega,M], axis=-1)) #n,2s+2
         W = jax.vmap(jax.vmap(self.connection_model, in_axes=(0,None)), in_axes=(None,0))(g,g)
         W = W * (node_types.active[:,None] * node_types.active[None])
         network = CTRNN(
@@ -272,70 +284,6 @@ def make_single_type(mdl, n_neurons):
     mdl = eqx.tree_at(lambda x: [x.types], mdl, [types])
     return mdl
 
-# ========================= INTERFACE =============================
-
-def gridworld_sensory_interface(
-    obs: Observation, 
-    ctrnn: CTRNN, 
-    fov: int=1,
-    sensor_activation: Callable=jnn.tanh):
-    # ---
-    assert ctrnn.s is not None
-    # ---
-    xs = ctrnn.x
-    s = sensor_activation(ctrnn.s)
-    # ---
-    C = obs.chemicals # mC,W,W
-    W = obs.walls
-    mC, *_ = C.shape
-
-    coords = xs * jnp.array([[1,-1]], dtype=xs.dtype)
-    coords = jnp.round(coords * fov).astype(jnp.int16)
-    j, i = coords.T
-
-    Ic = jnp.sum(C[:,i,j].T * s[:,:mC], axis=1) # chemical input
-    Iw = W[i,j] * s[:,mC]
-    Ii = jnp.sum(s[:, mC+1:] * obs.internal, axis=1) # internal input
-
-    return Ic + Iw + Ii
-
-
-def gridworld_motor_interface(
-    ctrnn: CTRNN, 
-    threshold_to_move: float=0.1, 
-    border_threshold: float=0.9,
-    force_per_unit_activation: float=1.0,
-    m_activation: Callable=jnn.sigmoid,
-    pos_dtype: type=jnp.int16):
-    # ---
-    assert ctrnn.m is not None
-    # --- 
-    xs = ctrnn.x
-    m = m_activation(ctrnn.m)
-    v = ctrnn.v
-    # ---
-    xs = xs * jnn.one_hot(jnp.argmax(jnp.abs(xs), axis=-1), 2)
-
-    on_top = xs[:,1] > border_threshold
-    on_bottom = xs[:,1] < - border_threshold
-    on_right = xs[:,0] > border_threshold
-    on_left = xs[:,0] < - border_threshold
-
-    forces = v*m*force_per_unit_activation
-    N_force = jnp.where(on_bottom, forces, 0.0).sum()   #type:ignore
-    S_force = jnp.where(on_top, forces, 0.0).sum()      #type:ignore
-    E_force = jnp.where(on_left, forces, 0.0).sum()     #type:ignore
-    W_force = jnp.where(on_right, forces, 0.0).sum()    #type:ignore
-
-    NSEW_forces = jnp.array([N_force, S_force, E_force, W_force])
-    max_dir = jnp.argmax(NSEW_forces)
-    force = NSEW_forces[max_dir]
-
-    moves = jnp.array([[-1,0],[1,0],[0,1],[0,-1]], dtype=pos_dtype)
-
-    move = jax.lax.select(force>threshold_to_move, moves[max_dir], jnp.zeros(2,dtype=pos_dtype))
-
-    return move
 
 # ========================= EVOLUTION =============================
 
@@ -552,10 +500,13 @@ if __name__ == '__main__':
         internal=jnp.zeros(2)
     )
     I = gridworld_sensory_interface(obs, ctrnn)
-    #plt.scatter(*ctrnn.x.T, c=I)
-    #plt.show()
+
+    plt.scatter(*ctrnn.x.T, c=I)
+    plt.colorbar()
+    plt.show()
 
     ctrnn = ctrnn._replace(v=I)
 
     a = gridworld_motor_interface(ctrnn)
     print(a)
+

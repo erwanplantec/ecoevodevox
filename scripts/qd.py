@@ -123,7 +123,7 @@ def train(cfg: Config):
 		is_inter = (~(is_sensor|is_motor)) & msk
 		return (is_sensor_only.sum(), is_motor_only.sum(), is_sensorimotor.sum(), is_inter.sum())
 
-	def encode_fn(ctrnn: CTRNN, obs: jax.Array):
+	def encode_fn(obs: jax.Array, ctrnn: CTRNN):
 		# ---
 		assert ctrnn.s is not None
 		# ---

@@ -1,0 +1,448 @@
+from typing import Callable, NamedTuple
+import jax
+from jax.flatten_util import ravel_pytree
+import jax.numpy as jnp
+import jax.random as jr
+import jax.nn as jnn
+import evosax as ex
+import equinox as eqx
+from jaxtyping import PyTree
+import realax as rx
+from functools import partial
+import wandb
+
+from src.devo.ctrnn import CTRNN
+from src.eco.gridworld import (GridWorld,
+							   EnvState,
+							   FoodType,
+							   ChemicalType,
+							   Observation)
+from src.devo.model_e import (Model_E, 
+							  CTRNNPolicyConfig, 
+							  mutate)
+from src.devo.utils import make_apply_init
+
+
+class Config(NamedTuple):
+	seed: int=0
+	# --- log
+	wandb_log: bool=False
+	# --- world
+	size: tuple[int,int]=(512,512)
+	n_food_types: int=1
+	reproduction_rate: float=1e-2
+	spontaneous_grow_prob: float=1e-6
+	initial_food_density: float=1e-3
+	# --- agents
+	max_agents: int=10_000
+	initial_agents: int=256
+	birth_pool_size: int=2048
+	reproduction_cost: float=0.5
+	move_cost: float=0.1
+	max_energy: float=20.0
+	base_energy_loss: float=0.1
+	time_below_threshold_to_die: int=30
+	time_above_threshold_to_reproduce: int=50
+	# --- sensor interface
+	fov: int=1
+	sensor_expression_threshold: float=0.03
+	border_threshold: float=0.9
+	# --- motor interface
+	move_force_threshold: float=0.1 #minimum amount of force
+	motor_expression_threshold: float=0.03
+	force_threshold_to_move: float=0.1
+	neurons_max_motor_force: float=0.1
+	neurons_force_gain: float=0.1
+	passive_eating: bool=True
+	passive_reproduction: bool=True
+	# --- dev model
+	mdl: str="e"
+	max_neurons: int=128
+	n_synaptic_markers: int=4
+	max_types: int=8
+	T_dev: float=10.
+	dt_dev: float=0.1
+	temp_dcay: float=0.90
+	extra_migration_fields: int=3
+	N_gain: float=50.
+	connection_model: str="xoxt"
+	# --- ctrnn prms
+	T_ctrnn: float=0.5
+	dt_ctrnn: float=0.1
+	# --- mutations
+	sigma_mut: float=0.03
+	p_mut: float=1e-3
+	p_duplicate: float=1e-3
+	p_rm: float=1e-3
+	p_add: float=1e-3
+
+
+def sensory_expression(
+	ctrnn: CTRNN,
+	sensor_activation: Callable=jnn.tanh,
+	expression_threshold: float=0.03):
+	assert ctrnn.s is not None
+	s = ctrnn.s
+	s = jnp.where(jnp.abs(s)>expression_threshold, s, 0.0)
+	s = sensor_activation(s) #neurons,ds
+	return s
+
+def gridworld_sensory_interface(
+	obs: Observation, 
+	ctrnn: CTRNN, 
+	fov: int=1,
+	sensor_activation: Callable=jnn.tanh,
+	expression_threshold: float=0.03,
+	border_threshold: float=0.9):
+	# ---
+	assert ctrnn.s is not None
+	# ---
+	xs = ctrnn.x
+	s = sensory_expression(ctrnn, sensor_activation, expression_threshold)
+	# ---
+	C = obs.chemicals # mC,W,W
+	W = obs.walls
+	mC, *_ = C.shape
+
+	xs = xs * (1/(2*border_threshold)) #correct suche that rounding threshold is at border threshold
+	coords = fov+jnp.round(xs.at[:,1].multiply(-1.) * fov).astype(jnp.int16)
+	j, i = coords.T
+
+	Ic = jnp.sum(C[:,i,j].T * s[:,:mC], axis=1) # chemical input #type:ignore
+	Iw = jnp.sum(W[:,i,j].T * s[:,mC:mC+1], axis=1) # walls input #type:ignore
+	Ii = jnp.sum(s[:, mC+1:] * obs.internal, axis=1) # internal input #type:ignore
+
+	I = Ic + Iw + Ii
+	return I
+
+def motor_expression(
+	ctrnn: CTRNN,
+	border_threshold: float=0.9,
+	expression_threshold:float=0.03,
+	m_activation: Callable=lambda m: jnp.clip(m, 0.0, 1.0)):
+	assert ctrnn.m is not None
+	m = ctrnn.m
+	m = jnp.where(jnp.abs(m)>expression_threshold, m, 0.0)
+	m = m_activation(m)
+	on_border = jnp.any(jnp.abs(ctrnn.x)>border_threshold, axis=-1)
+	m = jnp.where(on_border[:,None], m, 0.0)
+	assert isinstance(m, jax.Array)
+	return m
+
+
+def gridworld_motor_interface(
+	ctrnn: CTRNN, 
+	border_threshold: float=0.9,
+	expression_threshold:float=0.03,
+	m_activation: Callable=lambda m: jnp.clip(m, 0.0, 1.0),
+	threshold_to_move: float=0.1,
+	neurons_force_gain: float=0.1,
+	neurons_max_force: float=0.1,
+	pos_dtype: type=jnp.int16):
+	# ---
+	assert ctrnn.m is not None
+	# --- 
+	xs = ctrnn.x
+	m = motor_expression(ctrnn, border_threshold, 
+		expression_threshold, m_activation)
+	v = ctrnn.v
+	# ---
+	xs = xs * jnn.one_hot(jnp.argmax(jnp.abs(xs), axis=-1), 2)
+
+	on_top = xs[:,1] > border_threshold
+	on_bottom = xs[:,1] < - border_threshold
+	on_right = xs[:,0] > border_threshold
+	on_left = xs[:,0] < - border_threshold
+
+	forces = jnp.clip(v*m*neurons_force_gain, 0.0, neurons_max_force)
+	N_force = jnp.where(on_bottom, forces, 0.0).sum()   #type:ignore
+	S_force = jnp.where(on_top, forces, 0.0).sum()      #type:ignore
+	E_force = jnp.where(on_left, forces, 0.0).sum()     #type:ignore
+	W_force = jnp.where(on_right, forces, 0.0).sum()    #type:ignore
+
+	NSEW_forces = jnp.array([N_force, S_force, E_force, W_force])
+	NSEW_directions = jnp.array([[1,0],[-1,0],[0,1],[0,-1]], dtype=pos_dtype)
+	
+	net_force = jnp.sum(NSEW_forces[:,None] * NSEW_directions, axis=0) #2,
+	largest_component_idx = jnp.argmax(jnp.abs(net_force))
+	largest_component = net_force[largest_component_idx]
+	largest_component_direction = jnp.sign(largest_component).astype(jnp.uint16)
+	move = jnp.zeros(2, dtype=jnp.int16).at[largest_component_idx].set(largest_component_direction)
+	move = move * (jnp.abs(largest_component)>threshold_to_move)
+	return move
+
+
+
+def simulate(cfg: Config):
+
+	#-------------------------------------------------------------------
+
+	assert cfg.birth_pool_size<=cfg.max_agents
+
+	#-------------------------------------------------------------------
+
+	interface = CTRNNPolicyConfig(
+
+		encode_fn=partial(gridworld_sensory_interface, 
+						  fov=cfg.fov, 
+						  border_threshold=cfg.border_threshold,
+						  expression_threshold=cfg.sensor_expression_threshold),
+		
+		decode_fn=partial(gridworld_motor_interface, 
+						  threshold_to_move=cfg.force_threshold_to_move,
+						  border_threshold=cfg.border_threshold, 
+						  neurons_force_gain=cfg.neurons_force_gain,
+						  neurons_max_force=cfg.neurons_max_motor_force),
+		
+		T=cfg.T_ctrnn, 
+
+		dt=cfg.dt_ctrnn
+	)
+
+	sensory_dimensions = cfg.n_food_types + 3
+	motor_dimensions = 1 + int(not cfg.passive_eating) + int(not cfg.passive_reproduction)
+
+	if cfg.mdl=="e":
+		model_fctry = lambda key: Model_E(n_types=cfg.max_types, 
+										  n_synaptic_markers=cfg.n_synaptic_markers,
+										  max_nodes=cfg.max_neurons,
+										  sensory_dimensions=sensory_dimensions,
+										  motor_dimensions=motor_dimensions,
+										  dt=cfg.dt_dev,
+										  dvpt_time=cfg.T_dev,
+										  temperature_decay=cfg.temp_dcay,
+										  extra_migration_fields=cfg.extra_migration_fields,
+										  N_gain=cfg.N_gain,
+										  policy_cfg=interface,
+										  body_shape="square",
+										  key=key)
+	else:
+		raise NameError(f"model {cfg.mdl} is not valid")
+
+	_dummy_model = model_fctry(jr.key(1))
+	_dummy_prms = eqx.filter(_dummy_model, eqx.is_array)
+	prms_shaper = ex.ParameterReshaper(_dummy_prms)
+	agent_apply, agent_init = make_apply_init(_dummy_model)
+
+	#-------------------------------------------------------------------
+
+	mutation_fn = partial(mutate, 
+						  p_duplicate=cfg.p_duplicate, 
+						  p_add=cfg.p_add,
+						  p_rm=cfg.p_rm,
+						  p_mut=cfg.p_mut,
+						  sigma_mut=cfg.sigma_mut,
+						  shaper=prms_shaper)
+
+	_ravel_pytree = lambda x: ravel_pytree(x)[0]
+	agent_prms_fctry = lambda key: mutation_fn(_ravel_pytree(
+		eqx.filter(model_fctry(key), eqx.is_array)
+	), key)
+
+	#-------------------------------------------------------------------
+
+	n = cfg.n_food_types
+	
+	food_types = FoodType(
+		chemical_signature=jnp.identity(n),
+		reproduction_rate=jnp.full((n,), cfg.reproduction_rate),
+		expansion_rate=jnp.ones(n), 
+		max_concentration=jnp.ones(n),
+		energy_concentration=jnp.ones(n),
+		spontaneous_grow_prob=jnp.full(n, cfg.spontaneous_grow_prob)
+	)
+
+	chemical_types = ChemicalType(jnp.full((n,), 2.0))
+	
+	world = GridWorld(
+		size=cfg.size,
+		# ---
+		max_agents=cfg.max_agents,
+		agent_fctry=agent_prms_fctry,
+		agent_apply=agent_apply,
+		agent_init=agent_init,
+		init_agents=cfg.initial_agents,
+		# ---
+		move_energy_cost=cfg.move_cost,
+		reproduction_energy_cost=cfg.reproduction_cost,
+		base_energy_loss=cfg.base_energy_loss,
+		time_below_threshold_to_die=cfg.time_below_threshold_to_die,
+		time_above_threshold_to_reproduce=cfg.time_above_threshold_to_reproduce,
+		predation=False,
+		passive_eating=cfg.passive_eating,
+		passive_reproduction=cfg.passive_reproduction,
+		# ---
+		mutation_fn=mutation_fn,
+		birth_pool_size=cfg.birth_pool_size,
+		# ---
+		chemical_types=chemical_types,
+		food_types=food_types,
+		initial_food_density=cfg.initial_food_density
+	)
+
+	#-------------------------------------------------------------------
+
+	def count_implicit_types(ctrnn):
+		msk = ctrnn.mask > 0.0
+		is_sensor = sensory_expression(ctrnn, 
+									   expression_threshold=cfg.sensor_expression_threshold).astype(bool)
+		is_sensor = jnp.any(is_sensor, -1)
+		is_motor = motor_expression(ctrnn,
+									border_threshold=cfg.border_threshold,
+									expression_threshold=cfg.motor_expression_threshold).astype(bool)
+		is_motor = jnp.any(is_motor, -1)
+		is_sensorimotor = is_sensor & is_motor
+		is_sensor_only = (~is_motor) & is_sensor
+		is_motor_only = (~is_sensor) & is_motor
+		is_inter = (~(is_sensor|is_motor)) & msk
+		return (is_sensor_only.sum(), is_motor_only.sum(), is_sensorimotor.sum(), is_inter.sum())
+
+	def metrics_fn(state: EnvState, step_data: PyTree):
+		# ---
+		masked_sum = lambda x, mask: jnp.sum(jnp.where(mask, x, 0.0)) # type:ignore
+		masked_mean = lambda x, mask: masked_sum(x,mask) / (jnp.sum(mask)+1e-8) #type:ignore
+		# ---
+		actions = step_data["actions"]
+		alive = state.agents.alive
+		networks = state.agents.policy_state
+		nb_sensors, nb_motors, nb_sensorimotors, nb_inters = jax.vmap(count_implicit_types)(networks)
+		prms: PyTree = prms_shaper.reshape(state.agents.prms)
+		active_types = prms.types.active.sum(-1)
+		expressed_types = jnp.sum(jnp.round(prms.types.pi * prms.types.active * cfg.N_gain) > 0.0, axis=-1)
+		log_data = {
+			# --- AGENTS
+			"alive": alive,
+			"population": alive.sum(),
+			"nb_moved": jnp.sum(~jnp.all(actions == jnp.zeros(2, dtype=actions.dtype)[None], axis=-1)),
+			"nb_reproductions": jnp.sum(step_data["reproducing"]),
+			"nb_dead": jnp.sum(step_data["dying"]),
+			# --- NETWORKS
+			"network_sizes": networks.mask.sum(-1),
+			"avg_network_size": masked_mean(networks.mask.sum(-1), alive),
+			"nb_sensors": nb_sensors,
+			"avg_nb_sensors": masked_mean(nb_sensors, alive),
+			"nb_motors": nb_motors,
+			"avg_nb_motors": masked_mean(nb_motors, alive),
+			"nb_inters": nb_inters,
+			"avg_nb_inters": masked_mean(nb_inters, alive),
+			"nb_sensorimotors": nb_sensorimotors,
+			"avg_nb_sensorimotors": masked_mean(nb_sensorimotors, alive),
+			"active_types": active_types,
+			"avg_active_types": masked_mean(active_types, alive),
+			"expressed_types": expressed_types,
+			"avg_expressed_types": masked_mean(expressed_types, alive),
+			# --- FOOD
+			"total_food": jnp.sum(state.food),
+			"total_food_coverage": jnp.sum(state.food>0) / (world.size[0]*world.size[1]),
+			**{f"total_food_type_{i}": jnp.sum(food) for i, food in enumerate(state.food)}
+
+		}
+
+		return log_data, {}, 0
+
+	fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
+					  "nb_inters", "active_types", "expressed_types"]
+
+	def host_log_transform(data):
+		alive = data["alive"]
+
+		for field in fields_to_mask:
+			data[field] = data[field][alive]
+
+		del data["alive"]
+
+		return data
+
+
+	logger = rx.Logger(cfg.wandb_log, metrics_fn, host_log_transform=host_log_transform)
+
+	#-------------------------------------------------------------------
+
+	def simulation_step(state: EnvState, key: jax.Array):
+
+		state, step_data = world.step(state, key)
+		
+		logger.log(state, step_data)
+
+		return state
+
+	@partial(jax.jit, static_argnames=("steps"))
+	def simulate_n_steps(state: EnvState, key: jax.Array, steps: int):
+
+		def _body_fun(i, c):
+			state, key = c
+			key, key_step = jr.split(key)
+			state = simulation_step(state, key_step)
+			return [state, key]
+
+		[state, _] = jax.lax.fori_loop(0, steps, _body_fun, [state, key])
+
+		return state
+
+
+	#-------------------------------------------------------------------
+
+	key_sim, key_init, key_aux = jr.split(jr.key(cfg.seed), 3)
+
+	state = world.reset(key_init)
+
+	if cfg.wandb_log:
+		wandb.init(project="eedx_ediacaran", config=cfg._asdict())
+
+	while True:
+
+		cmd_and_args = input("cmd: ").strip()
+		cmd, *args = [s.strip() for s in cmd_and_args.split(" ")]
+
+		if cmd=="s":
+			# do n simulation steps
+			if not args:
+				print("nb of sim steps not entered")
+				continue
+			steps = int(args[0])
+			key_sim, _key = jr.split(key_sim)
+			state = simulate_n_steps(state, _key, steps)
+
+		elif cmd=="r":
+			fig, ax = plt.subplots()
+			world.render(state, ax=ax) #type:ignore
+
+			log = args[0] if args else False
+			if log and cfg.wandb_log:
+				wandb.log({"env_render": wandb.Image(fig)}, commit=False)
+			plt.show()
+
+		elif cmd=="q":
+			break
+		else:
+			print(f"unknown command {cmd}")
+
+	if cfg.wandb_log:
+		wandb.finish()
+
+
+	return state, {"world": world}
+
+
+
+if __name__ == '__main__':
+	import matplotlib.pyplot as plt
+
+	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
+		birth_pool_size=16, max_neurons=8, wandb_log=True)
+	state, tools = simulate(cfg)
+	world = tools["world"]
+	plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+
