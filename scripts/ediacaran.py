@@ -222,6 +222,10 @@ def simulate(cfg: Config):
 
 	_dummy_model = model_fctry(jr.key(1))
 	_dummy_prms = eqx.filter(_dummy_model, eqx.is_array)
+	_dummy_prms = eqx.tree_at(
+		lambda p: p.types.pi, 
+		_dummy_prms, 
+		_dummy_prms.types.pi.at[0].set(8.0/cfg.N_gain))
 	prms_shaper = ex.ParameterReshaper(_dummy_prms)
 	agent_apply, agent_init = make_apply_init(_dummy_model)
 
