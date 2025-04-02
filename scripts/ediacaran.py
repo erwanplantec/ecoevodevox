@@ -321,6 +321,8 @@ def simulate(cfg: Config):
 			"nb_moved": jnp.sum(~jnp.all(actions == jnp.zeros(2, dtype=actions.dtype)[None], axis=-1)),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"nb_dead": jnp.sum(step_data["dying"]),
+			"energy_levels": state.agents.energy,
+			"avg_energy_levels": masked_mean(state.agents.energy, alive) ,
 			# --- NETWORKS
 			"network_sizes": networks.mask.sum(-1),
 			"avg_network_size": masked_mean(networks.mask.sum(-1), alive),
