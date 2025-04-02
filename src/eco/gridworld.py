@@ -310,7 +310,7 @@ class GridWorld:
 				alive=agents_alive, 
 				prms=agents_prms, 
 				policy_state=agents_policy_states, 
-				energy=agents_energy, 
+				energy=jnp.clip(agents_energy, -jnp.inf, self.max_energy), 
 				position=agents_positions, 
 				time_above_threshold=agents_tat, 
 				time_below_threshold=agents_tbt, 
