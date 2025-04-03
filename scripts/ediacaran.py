@@ -337,7 +337,9 @@ def simulate(cfg: Config):
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"nb_dead": jnp.sum(step_data["dying"]),
 			"energy_levels": state.agents.energy,
-			"avg_energy_levels": masked_mean(state.agents.energy, alive) ,
+			"avg_energy_levels": masked_mean(state.agents.energy, alive),
+			"ages": state.agents.age,
+			"avg_age": masked_mean(state.agents.age, alive),
 			# --- NETWORKS
 			"network_sizes": (networks.mask*alive[:,None]).sum(-1),
 			"avg_network_size": masked_mean(networks.mask.sum(-1), alive),
@@ -356,14 +358,18 @@ def simulate(cfg: Config):
 			# --- FOOD
 			"total_food": jnp.sum(state.food),
 			"total_food_coverage": jnp.sum(state.food>0) / (world.size[0]*world.size[1]),
-			**{f"total_food_type_{i}": jnp.sum(food) for i, food in enumerate(state.food)}
+			**{f"total_food_type_{i}": jnp.sum(food) for i, food in enumerate(state.food)},
+			# --- render
+			"food_map": state.food,
+			"agents_pos": state.agents.position
+
 		}
 
 		return log_data, {}, 0
 
 	fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
 					  "nb_inters", "active_types", "expressed_types",
-					  "energy_levels"]
+					  "energy_levels", "ages"]
 
 	def host_log_transform(data):
 		alive = data["alive"]
@@ -371,7 +377,7 @@ def simulate(cfg: Config):
 		for field in fields_to_mask:
 			data[field] = data[field][alive]
 
-		del data["alive"]
+		data = jax.tree.map(np.asarray, data)
 
 		return data
 
