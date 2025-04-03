@@ -335,7 +335,7 @@ class GridWorld:
 		reproducing = agents.reproduce # N,
 
 		agents = jax.lax.cond(
-			jnp.any(reproducing),
+			jnp.any(reproducing)&jnp.any(~agents.alive),
 			_reproduce, 
 			lambda _, agents: agents, 
 			reproducing, agents
@@ -457,6 +457,9 @@ class GridWorld:
 
 		# --- Grow ---
 		p_grow = jax.vmap(partial(jsp.signal.convolve2d, mode="same"))(food, self.food_growth_kernels)
+		agents_i, agents_j = state.agents.position
+		agents_grid = jnp.zeros(self.size, dtype=jnp.bool).at[agents_i,agents_j].set(True)
+		p_grow = jnp.where(agents_grid, 0.0, p_grow)
 		grow = jr.bernoulli(key, p_grow).astype(i16)
 		grow = jnp.where(jnp.cumsum(jnp.pad(food,((1,0),(0,0),(0,0)))[:-1],axis=0)>0, 0, grow)
 		food = jnp.clip(food + grow, 0, self.food_types.max_concentration[:,None,None])
