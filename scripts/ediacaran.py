@@ -236,6 +236,18 @@ def simulate(cfg: Config):
 								 model.types.m.at[0,:].set(cfg.motor_expression_threshold+0.01)])
 			return model
 		model_factory = _fctry
+	elif cfg.mdl=="rnd":
+		class RandomAgent(eqx.Module):
+			logits: jax.Array
+			def __init__(self, key):
+				self.logits = jr.normal(key, (5,))
+			def __call__(self, obs, state, key):
+				actions = jnp.array([[0,0],[0,1],[0,-1],[1,0], [-1,0]], dtype=jnp.int16)
+				action_id = jr.categorical(key, self.logits)
+				action = actions[action_id]
+				return action, state
+			def initialize(self, key):
+				return None
 	else:
 		raise NameError(f"model {cfg.mdl} is not valid")
 
