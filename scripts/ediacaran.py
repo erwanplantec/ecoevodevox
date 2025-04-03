@@ -326,11 +326,12 @@ def simulate(cfg: Config):
 		prms: PyTree = prms_shaper.reshape(state.agents.prms)
 		active_types = prms.types.active.sum(-1)
 		expressed_types = jnp.sum(jnp.round(prms.types.pi * prms.types.active * cfg.N_gain) > 0.0, axis=-1)
+		have_moved = ~jnp.all(actions == jnp.zeros(2, dtype=actions.dtype)[None], axis=-1)
 		log_data = {
 			# --- AGENTS
 			"alive": alive,
 			"population": alive.sum(),
-			"nb_moved": jnp.sum(~jnp.all(actions*alive[:,None] == jnp.zeros(2, dtype=actions.dtype)[None], axis=-1)),
+			"nb_moved": masked_sum(have_moved, alive),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"nb_dead": jnp.sum(step_data["dying"]),
 			"energy_levels": state.agents.energy,
