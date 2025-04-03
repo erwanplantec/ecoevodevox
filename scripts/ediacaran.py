@@ -337,6 +337,8 @@ def simulate(cfg: Config):
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"nb_dead": jnp.sum(step_data["dying"]),
 			"energy_levels": state.agents.energy,
+			"nb_above_threshold": masked_sum(state.agents.energy>0.0, alive),
+			"nb_below_threshold": masked_sum(state.agents.energy<0.0, alive),
 			"avg_energy_levels": masked_mean(state.agents.energy, alive),
 			"ages": state.agents.age,
 			"avg_age": masked_mean(state.agents.age, alive),
