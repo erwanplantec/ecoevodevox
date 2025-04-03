@@ -194,7 +194,7 @@ class GridWorld:
 														 jr.split(key_action, self.max_agents), 
 														 state.agents.alive)
 		state = eqx.tree_at(lambda s: s.agents.policy_state, state, policy_states)
-		state = self._apply_actions(state, actions)
+		state, actions_data = self._apply_actions(state, actions)
 
 		# --- 3. Die / reproduce ---
 		state, update_agents_data = self._update_agents(state, key)
@@ -202,7 +202,14 @@ class GridWorld:
 		state = eqx.tree_at(lambda s: s.agents.age, state, state.agents.age+state.agents.alive)
 		state = state._replace(time=state.time+1)
 
-		return state, dict(state=state, actions=actions, observations=observations, **update_agents_data)
+		return (
+			state, 
+			dict(state=state, 
+				 actions=actions, 
+				 observations=observations,
+				 **actions_data, 
+				 **update_agents_data)
+		)
 
 	# ---
 
@@ -367,7 +374,7 @@ class GridWorld:
 
 	# ---
 
-	def _apply_actions(self, state: EnvState, actions: jax.Array)->EnvState:
+	def _apply_actions(self, state: EnvState, actions: jax.Array)->Tuple[EnvState, dict]:
 		"""
 		"""
 		agents = state.agents
@@ -412,7 +419,7 @@ class GridWorld:
 		eating_agents_grid = jnp.zeros(self.size, dtype=i16).at[agents_i,agents_j].add(eating_agents) #nb of eating agents in each cell
 		energy_intake_grid = jnp.clip(eating_agents_grid, 0, jnp.sum(food*self.food_types.energy_concentration[:,None,None], axis=0)) #total qty of consumed energy in each cell
 		energy_intake_per_agent = jnp.where(eating_agents_grid>0, energy_intake_grid/eating_agents_grid, 0)
-		agents_energy_intake = energy_intake_per_agent[agents_i, agents_j]
+		agents_energy_intake = jnp.where(agents.alive, energy_intake_per_agent[agents_i, agents_j], 0.0)
 		agents_energy = jnp.clip(agents.energy + agents_energy_intake, -jnp.inf, self.max_energy)
 
 		agents = agents._replace(energy=agents_energy)
@@ -427,7 +434,7 @@ class GridWorld:
 		reproduce = reproduce & (agents.time_above_threshold > self.time_above_threshold_to_reproduce)
 		agents = agents._replace(reproduce=reproduce)
 
-		return state._replace(agents=agents, food=food)
+		return state._replace(agents=agents, food=food), {"energy_intakes":agents_energy_intake}
 
 	# ====================== FOOD =========================
 

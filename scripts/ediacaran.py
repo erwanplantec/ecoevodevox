@@ -334,8 +334,6 @@ def simulate(cfg: Config):
 			# --- AGENTS
 			"alive": alive,
 			"population": alive.sum(),
-			"nb_moved": masked_sum(have_moved, alive),
-			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"nb_dead": jnp.sum(step_data["dying"]),
 			"energy_levels": state.agents.energy,
 			"nb_above_threshold": masked_sum(state.agents.energy>0.0, alive),
@@ -343,6 +341,11 @@ def simulate(cfg: Config):
 			"avg_energy_levels": masked_mean(state.agents.energy, alive),
 			"ages": state.agents.age,
 			"avg_age": masked_mean(state.agents.age, alive),
+			# --- ACTIONS
+			"nb_moved": masked_sum(have_moved, alive),
+			"nb_reproductions": jnp.sum(step_data["reproducing"]),
+			"energy_intakes": step_data["energy_intakes"],
+			"avg_energy_intake": masked_mean(step_data["energy_intakes"], alive),
 			# --- NETWORKS
 			"network_sizes": (networks.mask*alive[:,None]).sum(-1),
 			"avg_network_size": masked_mean(networks.mask.sum(-1), alive),
@@ -372,7 +375,7 @@ def simulate(cfg: Config):
 
 	fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
 					  "nb_inters", "active_types", "expressed_types",
-					  "energy_levels", "ages"]
+					  "energy_levels", "ages", "energy_intakes"]
 
 	def host_log_transform(data):
 		alive = data["alive"]
