@@ -231,7 +231,7 @@ class GridWorld:
 			position=jr.randint(key_pos, (self.max_agents, 2), minval=1, maxval=jnp.array(self.size, dtype=i16)-1, dtype=i16), 
 			policy_state=policy_states, 
 			reward=jnp.zeros((self.max_agents,), dtype=f16), 
-			age=jr.randint(key_age, (self.max_agents,), minval=1, maxval=self.max_age), 
+			age=jnp.zeros((self.max_agents), dtype=i16), 
 			n_offsprings=jnp.zeros(self.max_agents, dtype=i16),
 			id_=ids,
 			parent_id_=jnp.zeros(self.max_agents, dtype=ui32))
