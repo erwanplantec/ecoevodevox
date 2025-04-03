@@ -229,9 +229,11 @@ def simulate(cfg: Config):
 						    policy_cfg=interface,
 						    body_shape="square",
 						    key=key)
-			model = eqx.tree_at(lambda p: p.types.pi, 
+			model = eqx.tree_at(lambda p: [p.types.pi,p.types.s, p.types.m], 
 								model, 
-								model.types.pi.at[0].set(8.0/cfg.N_gain))
+								[model.types.pi.at[0].set(8.0/cfg.N_gain),
+								 model.types.s.at[0,:].set(cfg.sensor_expression_threshold+0.01),
+								 model.types.m.at[0,:].set(cfg.motor_expression_threshold+0.01)])
 			return model
 		model_factory = _fctry
 	else:
