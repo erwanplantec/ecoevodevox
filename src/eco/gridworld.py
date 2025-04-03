@@ -457,7 +457,7 @@ class GridWorld:
 
 		# --- Grow ---
 		p_grow = jax.vmap(partial(jsp.signal.convolve2d, mode="same"))(food, self.food_growth_kernels)
-		agents_i, agents_j = state.agents.position
+		agents_i, agents_j = state.agents.position.T
 		agents_grid = jnp.zeros(self.size, dtype=jnp.bool).at[agents_i,agents_j].set(True)
 		p_grow = jnp.where(agents_grid, 0.0, p_grow)
 		grow = jr.bernoulli(key, p_grow).astype(i16)
