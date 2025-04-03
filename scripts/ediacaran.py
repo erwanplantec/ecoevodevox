@@ -468,7 +468,8 @@ if __name__ == '__main__':
 	import matplotlib.pyplot as plt
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
-		birth_pool_size=16, max_neurons=8, wandb_log=False)
+		birth_pool_size=16, max_neurons=8, wandb_log=False, energy_concentration=100.,
+		initial_food_density=1.0)
 	state, tools = simulate(cfg)
 	world = tools["world"]
 	plt.show()

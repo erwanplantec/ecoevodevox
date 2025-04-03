@@ -6,6 +6,7 @@ import jax.random as jr
 import jax.nn as jnn
 import jax.scipy as jsp
 import equinox as eqx
+import numpy as np
 import equinox.nn as nn
 from celluloid import Camera
 
@@ -417,9 +418,10 @@ class GridWorld:
 		food = state.food
 		agents_i, agents_j = agents.position.T
 		eating_agents_grid = jnp.zeros(self.size, dtype=i16).at[agents_i,agents_j].add(eating_agents) #nb of eating agents in each cell
-		energy_intake_grid = jnp.clip(eating_agents_grid, 0, jnp.sum(food*self.food_types.energy_concentration[:,None,None], axis=0)) #total qty of consumed energy in each cell
-		energy_intake_per_agent = jnp.where(eating_agents_grid>0, energy_intake_grid/eating_agents_grid, 0)
+		energy_grid = jnp.sum(food*self.food_types.energy_concentration[:,None,None], axis=0) #total qty of energy in each cell
+		energy_intake_per_agent = jnp.where(eating_agents_grid>0, energy_grid/eating_agents_grid, 0.0)
 		agents_energy_intake = jnp.where(agents.alive, energy_intake_per_agent[agents_i, agents_j], 0.0)
+
 		agents_energy = jnp.clip(agents.energy + agents_energy_intake, -jnp.inf, self.max_energy)
 
 		agents = agents._replace(energy=agents_energy)
