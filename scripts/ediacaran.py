@@ -37,6 +37,7 @@ class Config(NamedTuple):
 	spontaneous_grow_prob: float=1e-6
 	initial_food_density: float=1e-3
 	energy_concentration: float=1.0
+	diffusion_rate: float=20.0
 	# --- agents
 	max_agents: int=10_000
 	initial_agents: int=256
@@ -269,7 +270,7 @@ def simulate(cfg: Config):
 		spontaneous_grow_prob=jnp.full(n, cfg.spontaneous_grow_prob)
 	)
 
-	chemical_types = ChemicalType(jnp.full((n,), 2.0))
+	chemical_types = ChemicalType(jnp.full((n,), cfg.diffusion_rate))
 	
 	world = GridWorld(
 		size=cfg.size,

@@ -242,18 +242,20 @@ class GridWorld:
 		
 		key_repr, key_mut, key_init = jr.split(key, 3)
 		agents = state.agents
+		
 		below_threshold = agents.energy < 0.
 		above_threshold = agents.energy > self.energy_reproduction_threshold
 		
-		agents_tat = (agents.time_above_threshold + above_threshold) * above_threshold * agents.alive
-		agents_tbt = (agents.time_below_threshold + below_threshold) * below_threshold * agents.alive
+		agents_tat = jnp.where(above_threshold&agents.alive, agents.time_above_threshold+1, 0); assert isinstance(agents_tat, jax.Array)
+		agents_tbt = jnp.where(below_threshold&agents.alive, agents.time_below_threshold+1, 0); assert isinstance(agents_tbt, jax.Array)
 
 		# --- 1. Death ---
 
 		dead = (agents_tbt > self.time_below_threshold_to_die) | (agents.age > self.max_age)
 		dead = dead & agents.alive
 		agents_alive = agents.alive & ( ~dead )
-		agents = agents._replace(alive=agents_alive, time_above_threshold=agents_tat, time_below_threshold=agents_tbt)
+		agents_age = jnp.where(agents_alive, agents.age, 0)
+		agents = agents._replace(alive=agents_alive, time_above_threshold=agents_tat, time_below_threshold=agents_tbt, age=agents_age)
 
 		# --- 2. Reproduce ---
 
