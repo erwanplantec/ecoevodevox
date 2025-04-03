@@ -31,10 +31,12 @@ class Config(NamedTuple):
 	wandb_log: bool=False
 	# --- world
 	size: tuple[int,int]=(512,512)
+	# --- food
 	n_food_types: int=1
 	reproduction_rate: float=1e-2
 	spontaneous_grow_prob: float=1e-6
 	initial_food_density: float=1e-3
+	energy_concentration: float=1.0
 	# --- agents
 	max_agents: int=10_000
 	initial_agents: int=256
@@ -263,7 +265,7 @@ def simulate(cfg: Config):
 		reproduction_rate=jnp.full((n,), cfg.reproduction_rate),
 		expansion_rate=jnp.ones(n), 
 		max_concentration=jnp.ones(n),
-		energy_concentration=jnp.ones(n),
+		energy_concentration=jnp.full((n,), cfg.energy_concentration),
 		spontaneous_grow_prob=jnp.full(n, cfg.spontaneous_grow_prob)
 	)
 
