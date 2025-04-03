@@ -412,17 +412,22 @@ def simulate(cfg: Config):
 
 		return log_data, {}, 0
 
-	fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
-					  "nb_inters", "active_types", "expressed_types",
-					  "energy_levels", "ages", "energy_intakes"]
+	fields_to_mask = ["energy_levels", "ages", "energy_intakes"]
+
+	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
+			  				  "nb_inters", "active_types", "expressed_types"]
 
 	def host_log_transform(data):
+		data = jax.tree.map(np.asarray, data)
+
 		alive = data["alive"]
 
 		for field in fields_to_mask:
 			data[field] = data[field][alive]
 
-		data = jax.tree.map(np.asarray, data)
+		if cfg.mdl=="e":
+			for field in model_e_fields_to_mask:
+				data[field] = data[field][alive]
 
 		return data
 
