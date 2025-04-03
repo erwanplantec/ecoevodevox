@@ -178,7 +178,7 @@ def gridworld_motor_interface(
 	net_force = jnp.sum(NSEW_forces[:,None] * NSEW_directions, axis=0) #2,
 	largest_component_idx = jnp.argmax(jnp.abs(net_force))
 	largest_component = net_force[largest_component_idx]
-	largest_component_direction = jnp.sign(largest_component).astype(jnp.uint16)
+	largest_component_direction = jnp.sign(largest_component).astype(jnp.int16)
 	move = jnp.zeros(2, dtype=jnp.int16).at[largest_component_idx].set(largest_component_direction)
 	move = move * (jnp.abs(largest_component)>threshold_to_move)
 	return move
