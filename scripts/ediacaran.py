@@ -236,6 +236,9 @@ def simulate(cfg: Config):
 								 model.types.m.at[0,:].set(cfg.motor_expression_threshold+0.01)])
 			return model
 		model_factory = _fctry
+
+	# ---
+
 	elif cfg.mdl=="rnd":
 		class RandomAgent(eqx.Module):
 			logits: jax.Array
@@ -247,7 +250,12 @@ def simulate(cfg: Config):
 				action = actions[action_id]
 				return action, state
 			def initialize(self, key):
-				return None
+				return 0
+
+		model_factory = lambda key: RandomAgent(key)
+
+	# ---
+
 	else:
 		raise NameError(f"model {cfg.mdl} is not valid")
 
@@ -258,15 +266,24 @@ def simulate(cfg: Config):
 
 	#-------------------------------------------------------------------
 
-	mutation_fn = partial(mutate, 
-						  p_duplicate=cfg.p_duplicate, 
-						  p_add=cfg.p_add,
-						  p_rm=cfg.p_rm,
-						  p_mut=cfg.p_mut,
-						  sigma_mut=cfg.sigma_mut,
-						  shaper=prms_shaper)
+	if cfg.mdl=="e":
+		mutation_fn = partial(mutate, 
+							  p_duplicate=cfg.p_duplicate, 
+							  p_add=cfg.p_add,
+							  p_rm=cfg.p_rm,
+							  p_mut=cfg.p_mut,
+							  sigma_mut=cfg.sigma_mut,
+							  shaper=prms_shaper)
+
+	elif cfg.mdl=="rnd":
+		mutation_fn = lambda prms, key: prms + jr.normal(key, prms.shape)*cfg.sigma_mut
+
+	else:
+		raise NameError
+
 
 	_ravel_pytree = lambda x: ravel_pytree(x)[0]
+
 	agent_prms_fctry = lambda key: mutation_fn(_ravel_pytree(
 		eqx.filter(_dummy_model, eqx.is_array)
 	), key)
@@ -338,12 +355,33 @@ def simulate(cfg: Config):
 		# ---
 		actions = step_data["actions"]
 		alive = state.agents.alive
-		networks = state.agents.policy_state
-		nb_sensors, nb_motors, nb_sensorimotors, nb_inters = jax.vmap(count_implicit_types)(networks)
-		prms: PyTree = prms_shaper.reshape(state.agents.prms)
-		active_types = prms.types.active.sum(-1)
-		expressed_types = jnp.sum(jnp.round(prms.types.pi * prms.types.active * cfg.N_gain) > 0.0, axis=-1)
 		have_moved = ~jnp.all(actions == jnp.zeros(2, dtype=actions.dtype)[None], axis=-1)
+
+		if cfg.mdl=="e":
+			networks = state.agents.policy_state
+			nb_sensors, nb_motors, nb_sensorimotors, nb_inters = jax.vmap(count_implicit_types)(networks)
+			prms: PyTree = prms_shaper.reshape(state.agents.prms)
+			active_types = prms.types.active.sum(-1)
+			expressed_types = jnp.sum(jnp.round(prms.types.pi * prms.types.active * cfg.N_gain) > 0.0, axis=-1)
+			model_metrics = {
+				"network_sizes": (networks.mask*alive[:,None]).sum(-1),
+				"avg_network_size": masked_mean(networks.mask.sum(-1), alive),
+				"nb_sensors": nb_sensors,
+				"avg_nb_sensors": masked_mean(nb_sensors, alive),
+				"nb_motors": nb_motors,
+				"avg_nb_motors": masked_mean(nb_motors, alive),
+				"nb_inters": nb_inters,
+				"avg_nb_inters": masked_mean(nb_inters, alive),
+				"nb_sensorimotors": nb_sensorimotors,
+				"avg_nb_sensorimotors": masked_mean(nb_sensorimotors, alive),
+				"active_types": active_types,
+				"avg_active_types": masked_mean(active_types, alive),
+				"expressed_types": expressed_types,
+				"avg_expressed_types": masked_mean(expressed_types, alive),
+			}
+		else:
+			model_metrics = {}
+
 		log_data = {
 			# --- AGENTS
 			"alive": alive,
@@ -361,20 +399,7 @@ def simulate(cfg: Config):
 			"energy_intakes": step_data["energy_intakes"],
 			"avg_energy_intake": masked_mean(step_data["energy_intakes"], alive),
 			# --- NETWORKS
-			"network_sizes": (networks.mask*alive[:,None]).sum(-1),
-			"avg_network_size": masked_mean(networks.mask.sum(-1), alive),
-			"nb_sensors": nb_sensors,
-			"avg_nb_sensors": masked_mean(nb_sensors, alive),
-			"nb_motors": nb_motors,
-			"avg_nb_motors": masked_mean(nb_motors, alive),
-			"nb_inters": nb_inters,
-			"avg_nb_inters": masked_mean(nb_inters, alive),
-			"nb_sensorimotors": nb_sensorimotors,
-			"avg_nb_sensorimotors": masked_mean(nb_sensorimotors, alive),
-			"active_types": active_types,
-			"avg_active_types": masked_mean(active_types, alive),
-			"expressed_types": expressed_types,
-			"avg_expressed_types": masked_mean(expressed_types, alive),
+			**model_metrics,
 			# --- FOOD
 			"total_food": jnp.sum(state.food),
 			"total_food_coverage": jnp.sum(state.food>0) / (world.size[0]*world.size[1]),
@@ -481,7 +506,7 @@ if __name__ == '__main__':
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
 		birth_pool_size=16, max_neurons=8, wandb_log=False, energy_concentration=100.,
-		initial_food_density=1.0)
+		initial_food_density=1.0, mdl="rnd")
 	state, tools = simulate(cfg)
 	world = tools["world"]
 	plt.show()
