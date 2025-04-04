@@ -449,7 +449,7 @@ class GridWorld:
 		
 		food = state.food
 		agents_i, agents_j = agents.position.T
-		eating_agents_grid = jnp.zeros(self.size, dtype=ui8).at[agents_i,agents_j].add(eating_agents) #nb of eating agents in each cell
+		eating_agents_grid = jnp.zeros(self.size, dtype=ui8).at[agents_i,agents_j].add(eating_agents.astype(jnp.uint8)) #nb of eating agents in each cell
 		energy_grid = jnp.sum(food*self.food_types.energy_concentration[:,None,None], axis=0) #total qty of energy in each cell
 		energy_intake_per_agent = jnp.where(eating_agents_grid>0, energy_grid/eating_agents_grid, 0.0)
 		agents_energy_intake = jnp.where(agents.alive, energy_intake_per_agent[agents_i, agents_j], 0.0)
@@ -457,7 +457,7 @@ class GridWorld:
 		agents_energy = jnp.clip(agents.energy + agents_energy_intake, -jnp.inf, self.max_energy)
 
 		agents = agents._replace(energy=agents_energy)
-		food = jnp.clip(food-eating_agents_grid[None], 0, self.food_types.max_concentration[:,None,None])
+		food = jnp.where(eating_agents_grid[None]>0, 0, food)
 
 		# --- 4. Reproduce ---
 		# agents reproduce if :
@@ -478,7 +478,7 @@ class GridWorld:
 
 	def _init_food(self, key)->FoodMap:
 		food = jr.bernoulli(key, self.food_types.initial_density[:,None,None], (self.n_food_types, *self.size)).astype(ui8)
-		food = jnp.where(jnp.cumsum(jnp.pad(food,((1,0),(0,0),(0,0)))[:-1],axis=0)>0, 0, food)
+		food = jnp.where(jnp.cumsum(food,axis=0)>1, 0, food)
 		return food
 
 	# ---
