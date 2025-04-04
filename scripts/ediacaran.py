@@ -264,7 +264,7 @@ def simulate(cfg: Config):
 	_dummy_prms = eqx.filter(_dummy_model, eqx.is_array)
 	prms_shaper = ex.ParameterReshaper(_dummy_prms)
 	_agent_apply, _agent_init = make_apply_init(_dummy_model)
-	
+
 	if cfg.cast_policy_states_to_f16:
 		def _cast_tree(tree: PyTree):
 			return jax.tree.map(
@@ -387,7 +387,7 @@ def simulate(cfg: Config):
 			active_types = prms.types.active.sum(-1)
 			expressed_types = jnp.sum(jnp.round(prms.types.pi * prms.types.active * cfg.N_gain) > 0.0, axis=-1)
 			model_metrics = {
-				"network_sizes": (networks.mask*alive[:,None]).sum(-1),
+				"network_sizes": jnp.where(alive, networks.mask.sum(-1), 0),
 				"avg_network_size": masked_mean(networks.mask.sum(-1), alive),
 				"nb_sensors": nb_sensors,
 				"avg_nb_sensors": masked_mean(nb_sensors, alive),
@@ -535,7 +535,7 @@ if __name__ == '__main__':
 	warnings.filterwarnings('error', category=FutureWarning)
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
-		birth_pool_size=16, max_neurons=8, wandb_log=False, energy_concentration=100.,
+		birth_pool_size=16, max_neurons=64, wandb_log=False, energy_concentration=100.,
 		initial_food_density=1.0, mdl="e", cast_policy_states_to_f16=True)
 	state, tools = simulate(cfg)
 	world = tools["world"]

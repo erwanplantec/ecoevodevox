@@ -438,8 +438,11 @@ def mutate(prms: jax.Array,
     def _mutate(prms, key):
         # small perturb
         epsilon = jr.normal(key, prms.shape) * sigma_mut
-        prms = jnp.where(mutation_mask, prms + epsilon, prms)
-        prms = jnp.clip(prms, clip_min, clip_max)
+        prms = jnp.where(
+            mutation_mask, 
+            jnp.clip(prms+epsilon, clip_min, clip_max), 
+            prms
+        )
         return prms
 
 
@@ -486,38 +489,7 @@ def mutate(prms: jax.Array,
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
-    x=jnp.mgrid[-10:11,-10:11].transpose((1,2,0)).reshape((-1,2)) / 10
-    N=x.shape[0]
-    ctrnn = CTRNN(
-        x=x,
-        v=jnp.zeros(N), 
-        tau=None, #type:ignore
-        gain=None, #type:ignore
-        bias=None,#type:ignore
-        W=None, #type:ignore
-        m=jnp.ones(N), 
-        s=jnp.ones((N,3)), 
-        id_=None)
-    
-    obs = Observation(
-        chemicals = jnp.array([
-            [[0.,0.,0.],
-             [0.,0.,0.],
-             [0.,1.,0.]]
-        ]),
-        walls = jnp.array([[0.,0.,0.],
-                           [0.,0.,0.],
-                           [0.,0.,0.]]),
-        internal=jnp.zeros(2)
-    )
-    I = gridworld_sensory_interface(obs, ctrnn)
-
-    plt.scatter(*ctrnn.x.T, c=I)
-    plt.colorbar()
-    plt.show()
-
-    ctrnn = ctrnn._replace(v=I)
-
-    a = gridworld_motor_interface(ctrnn)
-    print(a)
+    mdl = Model_E(8, 2, key=jr.key(1))
+    ctrnn = mdl.initialize(jr.key(1))
+    print(ctrnn.mask)
 
