@@ -416,6 +416,8 @@ def simulate(cfg: Config):
 			"avg_energy_levels": masked_mean(state.agents.energy, alive),
 			"ages": state.agents.age,
 			"avg_age": masked_mean(state.agents.age, alive),
+			"generations": state.agents.generation,
+			"avg_generation": masked_mean(state.agents.generation, alive),
 			# --- ACTIONS
 			"nb_moved": masked_sum(have_moved, alive),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
