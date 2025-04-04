@@ -31,6 +31,9 @@ class Config(NamedTuple):
 	wandb_log: bool=False
 	# --- world
 	size: tuple[int,int]=(512,512)
+	max_agents: int=10_000
+	birth_pool_size: int=2048
+	cast_policy_states_to_f16: bool=False
 	# --- food
 	n_food_types: int=1
 	reproduction_rate: float=1e-2
@@ -39,9 +42,7 @@ class Config(NamedTuple):
 	energy_concentration: float=1.0
 	diffusion_rate: float=20.0
 	# --- agents
-	max_agents: int=10_000
 	initial_agents: int=256
-	birth_pool_size: int=2048
 	reproduction_cost: float=0.5
 	move_cost: float=0.1
 	max_energy: float=20.0
@@ -262,7 +263,29 @@ def simulate(cfg: Config):
 	_dummy_model = model_factory(jr.key(0))
 	_dummy_prms = eqx.filter(_dummy_model, eqx.is_array)
 	prms_shaper = ex.ParameterReshaper(_dummy_prms)
-	agent_apply, agent_init = make_apply_init(_dummy_model)
+	_agent_apply, _agent_init = make_apply_init(_dummy_model)
+	
+	if cfg.cast_policy_states_to_f16:
+		def _cast_tree(tree: PyTree):
+			return jax.tree.map(
+				lambda x: x.astype(jnp.float16) if jnp.issubdtype(x.dtype, jnp.floating) else x,
+				tree
+			)
+		def wrapped_agent_init(prms: jax.Array, key: jax.Array)->PyTree:
+			state = _agent_init(prms, key)
+			state = _cast_tree(state)
+			return state
+
+		def wrapped_agent_apply(prms, obs, state, key):
+			obs = _cast_tree(obs)
+			action, state = _agent_apply(prms, obs, state, key)
+			return action,state
+
+		agent_init = wrapped_agent_init
+		agent_apply = wrapped_agent_apply
+	else:
+		agent_init = _agent_init
+		agent_apply = _agent_apply
 
 	#-------------------------------------------------------------------
 
@@ -298,7 +321,8 @@ def simulate(cfg: Config):
 		expansion_rate=jnp.ones(n), 
 		max_concentration=jnp.ones(n),
 		energy_concentration=jnp.full((n,), cfg.energy_concentration),
-		spontaneous_grow_prob=jnp.full(n, cfg.spontaneous_grow_prob)
+		spontaneous_grow_prob=jnp.full(n, cfg.spontaneous_grow_prob),
+		initial_density=jnp.full(n, cfg.initial_food_density)
 	)
 
 	chemical_types = ChemicalType(jnp.full((n,), cfg.diffusion_rate))
@@ -328,7 +352,6 @@ def simulate(cfg: Config):
 		# ---
 		chemical_types=chemical_types,
 		food_types=food_types,
-		initial_food_density=cfg.initial_food_density
 	)
 
 	#-------------------------------------------------------------------
@@ -487,9 +510,9 @@ def simulate(cfg: Config):
 		elif cmd=="r":
 			fig, ax = plt.subplots()
 			world.render(state, ax=ax) #type:ignore
-
 			log = args[0] if args else False
 			if log and cfg.wandb_log:
+				print("...logging figure to wandb")
 				wandb.log({"env_render": wandb.Image(fig)}, commit=False)
 			plt.show()
 
@@ -508,10 +531,12 @@ def simulate(cfg: Config):
 
 if __name__ == '__main__':
 	import matplotlib.pyplot as plt
+	import warnings
+	warnings.filterwarnings('error', category=FutureWarning)
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
 		birth_pool_size=16, max_neurons=8, wandb_log=False, energy_concentration=100.,
-		initial_food_density=1.0, mdl="rnd")
+		initial_food_density=1.0, mdl="e", cast_policy_states_to_f16=True)
 	state, tools = simulate(cfg)
 	world = tools["world"]
 	plt.show()

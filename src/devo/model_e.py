@@ -11,28 +11,33 @@ import equinox.nn as nn
 import evosax as ex
 
 from typing import Callable, NamedTuple
-from jaxtyping import Float, Int, PyTree
+from jaxtyping import (
+    PyTree,
+    Bool,
+    Float16, Float32, 
+    Int8, Int16, Int32,
+    UInt8, UInt16, UInt32)
 
 
 class NeuronType(NamedTuple):
     # ---
-    pi: Float
-    active: Float
-    id_: Int
+    pi:     Float32|Float16
+    active: Bool
     # -- Migration Parameters ---
-    psi: Float # molecular affinity
-    zeta: Float # molecular pertubation
-    gamma: Float # repulsion distance decay coefficients
-    theta: Float
+    psi:    Float32|Float16 # molecular affinity
+    zeta:   Float32|Float16 # molecular pertubation
+    gamma:  Float32|Float16 # repulsion distance decay coefficients
+    theta:  Float32|Float16
     # --- Connection Parameters ---
-    omega: Float # type-specific gene expression
+    omega:  Float32|Float16 # type-specific gene expression
     # --- Dynamical parameters ---
-    tau: Float
-    bias: Float
-    gain: Float
-    s: Float # expression of sensory elements
-    m: Float # expression of motor characteristics
+    tau:    Float32|Float16
+    bias:   Float32|Float16
+    gain:   Float32|Float16
+    s:      Float32|Float16 # expression of sensory elements
+    m:      Float32|Float16 # expression of motor characteristics
     # ---
+    id_:    UInt8|None=None
 
 
 # ====================== MIGRATION ======================
@@ -53,13 +58,16 @@ def migration_step(xs, t, psis, gammas, zetas, mask, thetas, dt=0.01, temperatur
     k = jnn.sigmoid((t - T_interactions)*10.0)
     
     thetas_l, thetas_u = thetas.T
-    mask = mask * jnn.sigmoid((t-thetas_l)*10.0) * jnn.sigmoid((thetas_u-t)*10.0)
+    mask = mask & (t>thetas_l) & (t<thetas_u)
 
     M = migration_field
     def M_(x):
         """Modified molecular field"""
         d = jnp.sum(jnp.square(x[None]-xs), axis=-1, keepdims=True) #N,1
-        return M(x) + k*jnp.sum(zetas * jnp.exp(-d/(gammas+1e-6)) * mask[:,None], axis=0)
+        perturbations = zetas * jnp.exp(-d/(gammas+1e-6)) #N, M
+        perturbations = jnp.where(mask[:,None], perturbations, jnp.zeros_like(perturbations)) #N, M
+        perturbation = k * jnp.sum(perturbations, axis=0) #type:ignore
+        return M(x) + perturbation
 
     def E(x, psi):
         """energy field"""
@@ -68,7 +76,7 @@ def migration_step(xs, t, psis, gammas, zetas, mask, thetas, dt=0.01, temperatur
     dx = - jax.vmap(jax.grad(E))(xs, psis)
     dx_norm = jnp.linalg.norm(dx, axis=-1, keepdims=True)
     dx = jnp.where(dx_norm>0, dx/dx_norm, dx)
-    dx = dx * mask[:,None]
+    dx = jnp.where(mask[:,None], dx, jnp.zeros_like(dx))
 
     if shape=="square":
         xs = jnp.clip(xs + dt * T * dx, -1., 1.)
@@ -138,19 +146,18 @@ class Model_E(CTRNNPolicy):
         self.migration_field = lambda x: jnp.concatenate([migration_field(x),jnp.zeros(extra_migration_fields)])
         
         types = NeuronType(
-            pi = jnp.zeros(n_types),
-            psi = jnp.zeros((n_types, n_fields)),
-            gamma = jnp.zeros((n_types, n_fields))+0.001,
-            zeta = jnp.zeros((n_types, n_fields)),
-            omega = jnp.zeros((n_types, n_synaptic_markers)),
-            theta = jnp.ones((n_types,2)).at[:,0].set(0.01),
-            active = jnp.zeros(n_types).at[0].set(1.),
-            id_ = jnp.arange(n_types),
-            s = jnp.zeros((n_types,sensory_dimensions)),
-            m = jnp.zeros((n_types, motor_dimensions)),
-            tau = jnp.ones(n_types),
-            bias= jnp.zeros(n_types),
-            gain = jnp.ones(n_types)
+            pi     = jnp.zeros(n_types),
+            psi    = jnp.zeros((n_types, n_fields)),
+            gamma  = jnp.zeros((n_types, n_fields))+0.001,
+            zeta   = jnp.zeros((n_types, n_fields)),
+            omega  = jnp.zeros((n_types, n_synaptic_markers)),
+            theta  = jnp.ones((n_types,2)).at[:,0].set(0.01),
+            active = jnp.zeros(n_types, dtype=bool).at[0].set(True),
+            s      = jnp.zeros((n_types,sensory_dimensions)),
+            m      = jnp.zeros((n_types, motor_dimensions)),
+            tau    = jnp.ones(n_types),
+            bias   = jnp.zeros(n_types),
+            gain   = jnp.ones(n_types)
         )
         
         self.types = types
@@ -175,7 +182,7 @@ class Model_E(CTRNNPolicy):
         
         # 1. Initialize neurons
         x0 = jr.normal(key, (self.max_nodes, 2)) * 0.1
-        node_type_ids = jnp.zeros(self.max_nodes)
+        node_type_ids = jnp.zeros(self.max_nodes, dtype=jnp.uint8)
         n_tot = 0
         pi = self.types.pi * self.types.active
         ns = jnp.ceil(pi * self.N_gain)
@@ -183,9 +190,11 @@ class Model_E(CTRNNPolicy):
             node_type_ids = jnp.where(jnp.arange(self.max_nodes)<n_tot+n*msk, node_type_ids+1, node_type_ids)
             n_tot += n*msk
         node_type_ids = self.n_types - node_type_ids
-        node_type_ids = jnp.where(node_type_ids < self.n_types, node_type_ids, -1).astype(int)
-        node_types = jax.tree.map(lambda x: x[node_type_ids], eqx.tree_at(lambda t:t.id_, self.types, jnp.arange(self.n_types)))
-
+        node_type_ids = jnp.where(node_type_ids < self.n_types, node_type_ids, -1).astype(jnp.uint8)
+        node_types = jax.tree.map(
+            lambda x: x[node_type_ids], 
+            eqx.tree_at(lambda t:t.id_, self.types, jnp.arange(self.n_types, dtype=jnp.uint8))
+        )
         
         # 2. Migrate
         step_fn = lambda i, x: migration_step(
@@ -205,10 +214,18 @@ class Model_E(CTRNNPolicy):
         g = jax.vmap(self.A)(jnp.concatenate([node_types.omega,M], axis=-1)) #n,2s+2
         W = jax.vmap(jax.vmap(self.connection_model, in_axes=(0,None)), in_axes=(None,0))(g,g)
         W = W * (node_types.active[:,None] * node_types.active[None])
+        
         network = CTRNN(
-            v=jnp.zeros(xs.shape[0]), 
-            x=xs, W=W, tau=node_types.tau, gain=node_types.gain, bias=node_types.bias, 
-            s=node_types.s, m=node_types.m, id_=node_types.id_, mask=node_types.active
+            v    = jnp.zeros(xs.shape[0]), 
+            x    = xs, 
+            W    = W, 
+            tau  = node_types.tau, 
+            gain = node_types.gain, 
+            bias = node_types.bias, 
+            s    = node_types.s, 
+            m    = node_types.m, 
+            id_  = node_types.id_, 
+            mask = node_types.active
         )
         
         return network
@@ -222,10 +239,9 @@ class Model_E(CTRNNPolicy):
 
 def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
     n_synaptic_markers = mdl.types.omega.shape[-1]
-    n_total = n_sensory_neurons + n_motor_neurons
+
     sensory_type = NeuronType(
         pi = n_sensory_neurons/mdl.N_gain, 
-        id_ = 0,
         psi = jnp.array([0.,-1.,0., 0., 0., 1., 0., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0.05, 0., 0.]),
         zeta = jnp.array([0.,0.,0., 0., 0., 1., 0., 0.]),
@@ -241,7 +257,6 @@ def make_two_types(mdl, n_sensory_neurons, n_motor_neurons):
     
     motor_type = NeuronType(
         pi = n_motor_neurons/mdl.N_gain,
-        id_ = 1,
         psi = jnp.array([0.,1.,0., 0., 0., 0., 1., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0., 0.08, 0.]),
         zeta = jnp.array([0.,0.,0., 0., 0., 0., 1., 0.]),
@@ -265,7 +280,6 @@ def make_single_type(mdl, n_neurons):
     n_synaptic_markers = mdl.types.omega.shape[-1]
     sensorimotor_type = NeuronType(
         pi = n_neurons/mdl.N_gain, 
-        id_ = 0,
         psi = jnp.array([0.,0.,0., 0., 0., 1., 0., 0.]),
         gamma = jnp.array([0.,0.,0., 0., 0., 0.1, 0., 0.]),
         zeta = jnp.array([0.,0.,0., 0., 0., 1., 0., 0.]),
@@ -287,7 +301,7 @@ def make_single_type(mdl, n_neurons):
 
 # ========================= EVOLUTION =============================
 
-def duplicate_type(model, key, split_pop=True):
+def duplicate_type(model: Model_E, key, split_pop=True):
     k1, k2 = jr.split(key)
     types = model.types
     n_types = model.types.pi.shape[0]
@@ -306,16 +320,13 @@ def duplicate_type(model, key, split_pop=True):
         pi = pi.at[i].set(pi_i)
         types = eqx.tree_at(lambda types: types.pi, types, pi)
     
-    types = eqx.tree_at(lambda types: types.id_, types, jnp.arange(n_types))
-    model = eqx.tree_at(lambda m: m.types, model, types)
-    
     return model, jnn.one_hot(i, num_classes=types.psi.shape[0])
 
 def add_random_type(model, key):
     active = model.types.active
     inactive = 1.0 - active
     k = jr.choice(key, jnp.arange(active.shape[0]), p=inactive/inactive.sum())
-    active = active.at[k].set(1.0)
+    active = active.at[k].set(True)
     order = jnp.argsort(active, descending=True)
     types = model.types._replace(active=active)
     types = jax.tree.map(lambda x: x[order], types)
@@ -324,7 +335,7 @@ def add_random_type(model, key):
 def remove_type(model, key):
     active = model.types.active
     k = jr.choice(key, jnp.arange(active.shape[0]), p=active/active.sum())
-    active = active.at[k].set(0.0)
+    active = active.at[k].set(False)
     order = jnp.argsort(active, descending=True)
     types = model.types._replace(active=active)
     types = jax.tree.map(lambda x: x[order], types)
@@ -351,9 +362,9 @@ max_prms = lambda prms_like: eqx.tree_at(
 )
 
 mask_prms = lambda prms_like: eqx.tree_at(
-    lambda tree: [tree.types.id_, tree.types.active],
-    jax.tree_map(lambda x: jnp.ones_like(x), prms_like),
-    [jnp.zeros_like(prms_like.types.id_), jnp.zeros_like(prms_like.types.active)]
+    lambda tree: tree.types.active,
+    jax.tree_map(lambda x: jnp.ones_like(x, dtype=bool), prms_like),
+    jnp.zeros_like(prms_like.types.active, dtype=bool)
 )
 
 prms_sample_min = lambda prms_like: eqx.tree_at(
@@ -420,14 +431,14 @@ def mutate(prms: jax.Array,
     def _point_mut(prms, key):
         k1, k2 = jr.split(key)
         muts = jr.uniform(k1, prms.shape, minval=sample_min, maxval=sample_max)
-        locs = jr.bernoulli(k2, p=p_mut*mutation_mask, shape=prms.shape)
+        locs = jnp.where(mutation_mask, jr.bernoulli(k2, p=p_mut, shape=prms.shape), False)
         mut_prms = jnp.where(locs, muts, prms)
         return mut_prms
 
     def _mutate(prms, key):
         # small perturb
-        epsilon = jr.normal(key, prms.shape) * sigma_mut * mutation_mask
-        prms = prms + epsilon
+        epsilon = jr.normal(key, prms.shape) * sigma_mut
+        prms = jnp.where(mutation_mask, prms + epsilon, prms)
         prms = jnp.clip(prms, clip_min, clip_max)
         return prms
 

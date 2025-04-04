@@ -13,13 +13,19 @@ from celluloid import Camera
 import matplotlib.pyplot as plt
 
 from typing import Callable, NamedTuple, Tuple, TypeVar
-from jaxtyping import Array, Bool, Float, Float16, Int, Int16, Int32, Int64, Int8, PyTree
+from jaxtyping import (
+	PyTree, Array,
+	Bool,
+	Int16, Int32,
+	UInt8, UInt16, UInt32,
+	Float16, Float32
+)
 
 # ======================== UTILS =============================
 
 from .utils import *
 
-type FoodMap = Int[Array, "F H W"]
+type FoodMap = UInt8[Array, "F H W"]
 type KeyArray = jax.Array
 type AgentState = PyTree
 type AgentParams = jax.Array
@@ -28,22 +34,25 @@ type Action = jax.Array
 # ============================================================
 
 class Agent(NamedTuple):
-	# ---
+	# --- 
+	prms: jax.Array
 	policy_state: PyTree
 	# ---
 	alive: Bool
 	age: Int16
 	position: Int16
 	energy: Float16
-	reward: Int8
-	reproduce: Bool
 	time_above_threshold: Int16
 	time_below_threshold: Int16
-	n_offsprings: Int16
-	id_: Int64
-	parent_id_: Int64
 	# ---
-	prms: PyTree
+	reward: Float16
+	reproduce: Bool
+	# --- infos
+	n_offsprings: UInt16
+	generation: UInt32
+	id_: UInt32
+	parent_id_: UInt32
+	# ---
 
 class ChemicalType(NamedTuple):
 	diffusion_rate: Float16
@@ -51,18 +60,19 @@ class ChemicalType(NamedTuple):
 class FoodType(NamedTuple):
 	reproduction_rate: Float16
 	expansion_rate: Float16
-	max_concentration: Int16
+	max_concentration: UInt8
 	chemical_signature: Float16
 	energy_concentration: Float16
 	spontaneous_grow_prob: Float16
+	initial_density: Float16
 
-_food_types_types = FoodType(f16, f16, i16, f16, f16, f16)
+_food_types_types = FoodType(f16, f16, ui8, f16, f16, f16, f16)
 
 class EnvState(NamedTuple):
 	agents: Agent
 	food: FoodMap
 	time: Int32
-	last_agent_id: Int64=0
+	last_agent_id: UInt32=0
 
 class Observation(NamedTuple):
 	chemicals: jax.Array
@@ -76,7 +86,7 @@ class GridWorld:
 		size: Tuple[int, int],
 		agent_fctry: Callable[[KeyArray], AgentParams], 
 		agent_init: Callable[[AgentParams, KeyArray], AgentState],
-		agent_apply: Callable[[AgentParams, Observation, AgentState, KeyArray], Action],
+		agent_apply: Callable[[AgentParams, Observation, AgentState, KeyArray], Tuple[Action,AgentState]],
 		mutation_fn: Callable[[AgentParams,KeyArray],AgentParams], 
 		chemical_types: ChemicalType,
 		food_types: FoodType,  
@@ -98,7 +108,6 @@ class GridWorld:
 		time_above_threshold_to_reproduce: int=20,
 		time_below_threshold_to_die: int=10,
 		initial_agent_energy: float=1.0,
-		initial_food_density: Float=0.01,
 		chemical_detection_threshold: float=0.01,
 		deadly_walls: bool=False,
 		size_apply_minibatches: int|None=None,
@@ -110,7 +119,6 @@ class GridWorld:
 
 		self.food_types = jax.tree.map(lambda x, ty: x.astype(ty), food_types, _food_types_types)
 		self.nb_food_types = food_types.reproduction_rate.shape[0]
-		self.initial_food_density = jnp.full((self.nb_food_types,), initial_food_density)
 		growth_kernels = jnp.stack([jnp.array([[0.0, r/4, 0.0],
 					       					   [r/4, 1-r, r/4],
 					       					   [0.0, r/4, 0.0]], dtype=f16) for r in self.food_types.expansion_rate])
@@ -181,7 +189,7 @@ class GridWorld:
 	# ---
 
 	def step(self, state: EnvState, key: jax.Array)->Tuple[EnvState,PyTree]:
-		
+
 		# --- 1. Update food sources ---
 		key, key_food = jr.split(key)
 		state = self._update_food(state, key_food)
@@ -226,23 +234,30 @@ class GridWorld:
 
 		key_prms, key_pos, key_init, key_age = jr.split(key, 4)
 		alive = jnp.arange(self.max_agents) < self.init_agents
-		ids = jnp.where(alive, jnp.cumsum(alive, dtype=i64)+1, 0)
 		prms = jax.vmap(self.agent_fctry)(jr.split(key_prms,self.max_agents))
 		policy_states = self.mapped_agent_init(prms, jr.split(key_init, alive.shape[0]), alive)
+		positions = jr.randint(key_pos, (self.max_agents, 2), minval=1, maxval=jnp.array(self.size, dtype=i16)-1, dtype=i16)
+
 		return Agent(
-			alive=alive, 
-			prms=prms, 
-			energy=jnp.full((self.max_agents), self.initial_agent_energy, dtype=f16)*alive,
-			reproduce=jnp.full((self.max_agents,), False, dtype=bool), 
-			time_above_threshold=jnp.full((self.max_agents,), 0, dtype=i16), 
-			time_below_threshold=jnp.full((self.max_agents,), 0, dtype=i16),
-			position=jr.randint(key_pos, (self.max_agents, 2), minval=1, maxval=jnp.array(self.size, dtype=i16)-1, dtype=i16), 
-			policy_state=policy_states, 
-			reward=jnp.zeros((self.max_agents,), dtype=f16), 
-			age=jnp.zeros((self.max_agents), dtype=i16), 
-			n_offsprings=jnp.zeros(self.max_agents, dtype=i16),
-			id_=ids,
-			parent_id_=jnp.zeros(self.max_agents, dtype=ui32))
+			# ---
+			prms 				 = prms, 
+			policy_state 		 = policy_states,
+			# ---
+			alive 				 = alive, 
+			energy 				 = jnp.full((self.max_agents), self.initial_agent_energy, dtype=f16)*alive, 
+			time_above_threshold = jnp.full((self.max_agents,), 0, dtype=ui16), 
+			time_below_threshold = jnp.full((self.max_agents,), 0, dtype=ui16),
+			position 			 = positions, 
+			# ---
+			reproduce 			 = jnp.full((self.max_agents,), False, dtype=bool),
+			reward 				 = jnp.zeros((self.max_agents,), dtype=f16), 
+			# ---
+			age 				 = jnp.ones((self.max_agents), dtype=ui16), 
+			n_offsprings 		 = jnp.zeros(self.max_agents, dtype=ui16),
+			id_ 				 = jnp.where(alive, jnp.cumsum(alive, dtype=ui32), 0),
+			parent_id_ 			 = jnp.zeros(self.max_agents, dtype=ui32),
+			generation 			 = jnp.zeros(self.max_agents, dtype=ui16)
+		)
 
 	# ---
 
@@ -269,7 +284,7 @@ class GridWorld:
 
 		# ---
 
-		def _reproduce(reproducing, agents):
+		def _reproduce(reproducing: jax.Array, agents: Agent)->Agent:
 			"""
 			"""
 			free_buffer_spots = ~agents.alive # N,
@@ -305,29 +320,41 @@ class GridWorld:
 			agents_tbt = agents_tbt.at[childs_buffer_id].set(0)
 
 			agents_age = agents.age.at[childs_buffer_id].set(0)
-			agents_age = jnp.where(agents_alive, agents.age+1, 0)
+
+			agents_reward = agents.reward.at[childs_buffer_id].set(0)
+
+			agents_reproduce = agents.reproduce.at[childs_buffer_id].set(False)
 
 			agents_n_offsprings = agents.n_offsprings.at[childs_buffer_id].set(0)
 			agents_n_offsprings = agents_n_offsprings.at[parents_buffer_id].add(1)
 
-			childs_ids = jnp.where(childs_mask, jnp.cumsum(childs_mask, dtype=i64)+state.last_agent_id+1, 0)
+			childs_ids = jnp.where(childs_mask, jnp.cumsum(childs_mask, dtype=ui32)+state.last_agent_id+1, 0)
 			agents_id = agents.id_.at[childs_buffer_id].set(childs_ids)
 
 			childs_parent_id = agents.id_[parents_buffer_id]
-			parent_ids = agents.parent_id_.at[childs_buffer_id].set(childs_parent_id)
+			agents_parent_ids = agents.parent_id_.at[childs_buffer_id].set(childs_parent_id)
 
-			agents = agents._replace(
-				alive=agents_alive, 
-				prms=agents_prms, 
-				policy_state=agents_policy_states, 
-				energy=jnp.clip(agents_energy, -jnp.inf, self.max_energy), 
-				position=agents_positions, 
-				time_above_threshold=agents_tat, 
-				time_below_threshold=agents_tbt, 
-				age=agents_age,
-				n_offsprings=agents_n_offsprings,
-				id_=agents_id,
-				parent_id_=parent_ids
+			parents_generation = agents.generation[parents_buffer_id]
+			agents_generation = agents.generation.at[childs_buffer_id].set(parents_generation+1)
+
+			agents = Agent(
+				prms 				 = agents_prms,
+				policy_state 		 = agents_policy_states,
+				# ---
+				alive 				 = agents_alive,
+				age 				 = agents_age,
+				position 			 = agents_positions,
+				energy  			 = agents_energy,
+				time_above_threshold = agents_tat,
+				time_below_threshold = agents_tbt,
+				# ---
+				reward 				 = agents_reward,
+				reproduce 			 = agents_reproduce,
+				# ---
+				id_ 				 = agents_id,
+				parent_id_ 			 = agents_parent_ids,
+				generation 			 = agents_generation,
+				n_offsprings 		 = agents_n_offsprings
 			)
 			return agents
 		# ---	
@@ -341,9 +368,14 @@ class GridWorld:
 			reproducing, agents
 		)
 
-		new_last_id_ = agents.id_.max()
+		agents = agents._replace(
+			age = jnp.where(agents.alive, agents.age+1, 0)
+		)
 
-		state = state._replace(agents=agents, last_agent_id=new_last_id_)
+		state = state._replace(
+			agents=agents, 
+			last_agent_id=agents.id_.max(),
+		)
 		return state, dict(reproducing=reproducing, dying=dead)
 
 	# ---
@@ -417,7 +449,7 @@ class GridWorld:
 		
 		food = state.food
 		agents_i, agents_j = agents.position.T
-		eating_agents_grid = jnp.zeros(self.size, dtype=i16).at[agents_i,agents_j].add(eating_agents) #nb of eating agents in each cell
+		eating_agents_grid = jnp.zeros(self.size, dtype=ui8).at[agents_i,agents_j].add(eating_agents) #nb of eating agents in each cell
 		energy_grid = jnp.sum(food*self.food_types.energy_concentration[:,None,None], axis=0) #total qty of energy in each cell
 		energy_intake_per_agent = jnp.where(eating_agents_grid>0, energy_grid/eating_agents_grid, 0.0)
 		agents_energy_intake = jnp.where(agents.alive, energy_intake_per_agent[agents_i, agents_j], 0.0)
@@ -445,7 +477,7 @@ class GridWorld:
 		return self.food_types.reproduction_rate.shape[0]
 
 	def _init_food(self, key)->FoodMap:
-		food = jr.bernoulli(key, self.initial_food_density[:,None,None], (self.n_food_types, *self.size)).astype(i16)
+		food = jr.bernoulli(key, self.food_types.initial_density[:,None,None], (self.n_food_types, *self.size)).astype(ui8)
 		food = jnp.where(jnp.cumsum(jnp.pad(food,((1,0),(0,0),(0,0)))[:-1],axis=0)>0, 0, food)
 		return food
 
@@ -454,14 +486,13 @@ class GridWorld:
 	def _update_food(self, state: EnvState, key: jax.Array):
 		"""Do one step of food growth"""
 		food = state.food
-
 		# --- Grow ---
 		p_grow = jax.vmap(partial(jsp.signal.convolve2d, mode="same"))(food, self.food_growth_kernels)
 		agents_i, agents_j = state.agents.position.T
-		agents_grid = jnp.zeros(self.size, dtype=jnp.int16).at[agents_i,agents_j].add(state.agents.alive.astype(jnp.int16)) > 0
+		agents_grid = jnp.zeros(self.size, dtype=ui8).at[agents_i,agents_j].add(state.agents.alive.astype(ui8)) > 0
 		p_grow = jnp.where(agents_grid, 0.0, p_grow)
-		grow = jr.bernoulli(key, p_grow).astype(i16)
-		grow = jnp.where(jnp.cumsum(jnp.pad(food,((1,0),(0,0),(0,0)))[:-1],axis=0)>0, 0, grow)
+		grow = jr.bernoulli(key, p_grow).astype(ui8)
+		grow = jnp.where((jnp.cumsum(food, axis=0)>1)|(jnp.cumsum(food, axis=0)>1), 0, grow)
 		food = jnp.clip(food + grow, 0, self.food_types.max_concentration[:,None,None])
 
 		return state._replace(food=food)

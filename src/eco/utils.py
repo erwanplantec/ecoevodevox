@@ -49,7 +49,7 @@ def minivmap(func, minibatch_size, check_func=None, default_output=None, func_ta
 
 
 f16, f32, i8, i16, i32, i64, ui8, ui16, ui32 = jnp.float16, jnp.float32, jnp.int8, jnp.int16, jnp.int32, jnp.int64, jnp.uint8, jnp.uint16, jnp.uint32
-MAX_INT16 = jnp.iinfo(jnp.uint16).max
+MAX_INT16 = jnp.iinfo(jnp.int16).max
 boolean_maxpool = lambda x: nn.Pool(init=False, operation=jnp.logical_or, num_spatial_dims=2, padding=1, kernel_size=3)(x[None])[0]
 convolve = partial(jsp.signal.convolve, mode="same")
 
