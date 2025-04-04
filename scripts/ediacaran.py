@@ -437,7 +437,7 @@ def simulate(cfg: Config):
 
 		return log_data, {}, 0
 
-	fields_to_mask = ["energy_levels", "ages", "energy_intakes"]
+	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations"]
 
 	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
 			  				  "nb_inters", "active_types", "expressed_types"]
