@@ -50,7 +50,7 @@ class Config(NamedTuple):
 	applied_force_energy_cost: 			float = 0.0
 	s_expression_energy_cost: 			float = 0.0
 	m_expression_energy_cost: 			float = 0.0
-	neurons_energy_cost: 				float = 0.1
+	neurons_energy_cost: 				float = 0.0
 	time_below_threshold_to_die: 		int   = 30
 	time_above_threshold_to_reproduce: 	int   = 50
 	max_age: 							int   = 200
