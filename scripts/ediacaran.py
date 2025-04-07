@@ -338,7 +338,7 @@ def simulate(cfg: Config):
 						  + total_applied_force * cfg.applied_force_energy_cost)
 
 
-			return jnp.zeros((), dtype=jnp.float16)
+			return total_cost.astype(jnp.float16)
 
 		state_energy_cost_fn = _state_energy_cost_fn
 
@@ -454,7 +454,7 @@ def simulate(cfg: Config):
 			"avg_age": masked_mean(state.agents.age, alive),
 			"generations": state.agents.generation,
 			"avg_generation": masked_mean(state.agents.generation, alive),
-			"genotypes": state.agents.prms,
+			"genotypes": state.agents.prms.astype(jnp.float16),
 			# --- ACTIONS
 			"nb_moved": masked_sum(have_moved, alive),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
