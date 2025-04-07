@@ -480,7 +480,8 @@ def simulate(cfg: Config):
 	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations", "genotypes"]
 
 	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
-			  				  "nb_inters", "active_types", "expressed_types"]
+			  				  "nb_inters", "active_types", "expressed_types",
+			  				  "network_sizes"]
 
 
 
@@ -496,7 +497,7 @@ def simulate(cfg: Config):
 		for field in fields_to_mask:
 			data[field] = data[field][alive]
 
-		table_fields = ["genotypes"]
+		table_fields = ["genotypes", "generations", "energy_levels"]
 
 		if cfg.mdl=="e":
 			for field in model_e_fields_to_mask:
