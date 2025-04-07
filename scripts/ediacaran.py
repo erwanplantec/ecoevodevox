@@ -29,6 +29,7 @@ class Config(NamedTuple):
 	seed: int=0
 	# --- log
 	wandb_log: bool=False
+	log_table_freq: int=2
 	# --- world
 	size:            tuple[int,int] = (512,512)
 	max_agents:      int            = 10_000
@@ -454,7 +455,7 @@ def simulate(cfg: Config):
 			"avg_age": masked_mean(state.agents.age, alive),
 			"generations": state.agents.generation,
 			"avg_generation": masked_mean(state.agents.generation, alive),
-			#"genotypes": state.agents.prms.astype(jnp.float16),
+			"genotypes": state.agents.prms.astype(jnp.float16),
 			# --- ACTIONS
 			"nb_moved": masked_sum(have_moved, alive),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
@@ -476,22 +477,42 @@ def simulate(cfg: Config):
 
 		return log_data, {}, 0
 
-	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations"]
+	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations", "genotypes"]
 
 	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
 			  				  "nb_inters", "active_types", "expressed_types"]
 
+
+
 	def host_log_transform(data):
+		# ---
+		assert wandb.run is not None
+		# ---
 		data = jax.tree.map(np.asarray, data)
 
 		alive = data["alive"]
 
+
 		for field in fields_to_mask:
 			data[field] = data[field][alive]
+
+		table_fields = ["genotypes"]
 
 		if cfg.mdl=="e":
 			for field in model_e_fields_to_mask:
 				data[field] = data[field][alive]
+			table_fields.extend(model_e_fields_to_mask)
+
+		log_step = wandb.run._step
+		if not log_step % cfg.log_table_freq:
+			n_rows = data[table_fields[0]].shape[0]
+			table_columns = [data[field] for field in table_fields]
+			table_data = [[col[r] if field!="genotypes" else list(col[r]) for col, field in zip(table_columns, table_fields)]+[log_step] for r in range(n_rows)]
+			table = wandb.Table(columns=table_fields+["_step"], data=table_data)
+			data["population_data"] = table
+
+		del data["alive"]
+		del data["genotypes"]
 
 		return data
 
@@ -543,7 +564,7 @@ def simulate(cfg: Config):
 				continue
 			steps = int(args[0])
 			key_sim, _key = jr.split(key_sim)
-			state = simulate_n_steps(state, _key, steps)
+			state = jax.block_until_ready(simulate_n_steps(state, _key, steps))
 
 		elif cmd=="ss":
 			key_sim, _key = jr.split(key_sim)
