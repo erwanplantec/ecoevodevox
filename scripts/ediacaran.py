@@ -47,9 +47,9 @@ class Config(NamedTuple):
 	base_energy_loss: 					float = 0.1
 	reproduction_cost: 					float = 0.5
 	move_cost: 							float = 0.1
-	applied_force_energy_cost: 			float = 0.1
-	s_expression_energy_cost: 			float = 0.1
-	m_expression_energy_cost: 			float = 0.1
+	applied_force_energy_cost: 			float = 0.0
+	s_expression_energy_cost: 			float = 0.0
+	m_expression_energy_cost: 			float = 0.0
 	neurons_energy_cost: 				float = 0.1
 	time_below_threshold_to_die: 		int   = 30
 	time_above_threshold_to_reproduce: 	int   = 50
@@ -332,10 +332,10 @@ def simulate(cfg: Config):
 										   expression_threshold=cfg.motor_expression_threshold)
 			total_applied_force = jnp.sum(jnp.clip(net.v*m_expressed*cfg.neurons_force_gain, 0.0, cfg.neurons_max_motor_force))
 
-			total_cost = (nb_neurons 			* cfg.neurons_energy_cost
-						  + s_expressed 		* cfg.s_expression_energy_cost
-						  + m_expressed 		* cfg.m_expression_energy_cost
-						  + total_applied_force * cfg.applied_force_energy_cost)
+			total_cost = (nb_neurons 			 * cfg.neurons_energy_cost
+						  + jnp.sum(s_expressed) * cfg.s_expression_energy_cost
+						  + jnp.sum(m_expressed) * cfg.m_expression_energy_cost
+						  + total_applied_force  * cfg.applied_force_energy_cost)
 
 
 			return total_cost.astype(jnp.float16)

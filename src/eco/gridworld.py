@@ -419,7 +419,7 @@ class GridWorld:
 		"""
 		agents = state.agents
 		actions = jnp.where(agents.alive[:,None], actions, jnp.zeros(2, dtype=jnp.int16))
-		no_move = jnp.all(actions == jnp.zeros(2, dtype=jnp.int16)[None], axis=-1)
+		no_move = jnp.all(actions == 0, axis=-1)
 
 		# # --- 1. Predation ---
 
@@ -439,8 +439,11 @@ class GridWorld:
 
 		new_positions = agents.position+actions
 		hits_wall = self.walls[*new_positions.T].astype(bool) #type:ignore
+		
+		# --- update energy
 		positions = jnp.where(hits_wall[:,None], agents.position, new_positions)
-		basal_energy_loss = jax.vmap(self.state_energy_cost_fn)(agents)
+		state_dependant__energy_loss = jax.vmap(self.state_energy_cost_fn)(agents)
+		basal_energy_loss = self.base_energy_loss + state_dependant__energy_loss
 		energy_loss = jnp.where(no_move, basal_energy_loss, basal_energy_loss+self.move_energy_cost)
 		agents_energy = jnp.where(agents.alive, agents.energy-energy_loss, 0.0)
 		agents = agents._replace(position=positions, energy=agents_energy)
