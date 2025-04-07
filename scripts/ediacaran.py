@@ -454,7 +454,7 @@ def simulate(cfg: Config):
 			"avg_age": masked_mean(state.agents.age, alive),
 			"generations": state.agents.generation,
 			"avg_generation": masked_mean(state.agents.generation, alive),
-			"genotypes": state.agents.prms.astype(jnp.float16),
+			#"genotypes": state.agents.prms.astype(jnp.float16),
 			# --- ACTIONS
 			"nb_moved": masked_sum(have_moved, alive),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
@@ -474,7 +474,7 @@ def simulate(cfg: Config):
 
 		return log_data, {}, 0
 
-	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations", "genotypes"]
+	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations"]
 
 	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
 			  				  "nb_inters", "active_types", "expressed_types"]
