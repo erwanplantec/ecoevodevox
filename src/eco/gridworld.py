@@ -84,12 +84,15 @@ class GridWorld:
 	def __init__(
 		self, 
 		size: Tuple[int, int],
+		# ---
 		agent_fctry: Callable[[KeyArray], AgentParams], 
 		agent_init: Callable[[AgentParams, KeyArray], AgentState],
 		agent_apply: Callable[[AgentParams, Observation, AgentState, KeyArray], Tuple[Action,AgentState]],
 		mutation_fn: Callable[[AgentParams,KeyArray],AgentParams], 
+		# ---
 		chemical_types: ChemicalType,
 		food_types: FoodType,  
+		# ---
 		max_agents: int=1_024, 
 		init_agents: int=256,
 		passive_eating: bool=True,
@@ -98,6 +101,7 @@ class GridWorld:
 		max_age: int=1_000,
 		field_of_view: int=1,
 		birth_pool_size: int|None=None,
+		# ---
 		energy_reproduction_threshold: float=0.,
 		reproduction_energy_cost: float=0.5,
 		predation_energy_gain: float=5.,
@@ -105,6 +109,8 @@ class GridWorld:
 		move_energy_cost: float=0.1,
 		base_energy_loss: float=0.05,
 		max_energy: float=10.0,
+		state_energy_cost_fn: Callable[[Agent],Float16]=lambda agent: jnp.zeros((), dtype=jnp.float16),
+		# ---
 		time_above_threshold_to_reproduce: int=20,
 		time_below_threshold_to_die: int=10,
 		initial_agent_energy: float=1.0,
@@ -178,6 +184,7 @@ class GridWorld:
 		self.move_energy_cost = move_energy_cost
 		self.predation_energy_gain = predation_energy_gain
 		self.predation_energy_cost = predation_energy_cost
+		self.state_energy_cost_fn = state_energy_cost_fn
 		self.max_age = max_age
 
 	# ---
@@ -433,7 +440,8 @@ class GridWorld:
 		new_positions = agents.position+actions
 		hits_wall = self.walls[*new_positions.T].astype(bool) #type:ignore
 		positions = jnp.where(hits_wall[:,None], agents.position, new_positions)
-		energy_loss = jnp.where(no_move, self.base_energy_loss, self.base_energy_loss+self.move_energy_cost)
+		basal_energy_loss = jax.vmap(self.state_energy_cost_fn)(agents)
+		energy_loss = jnp.where(no_move, basal_energy_loss, basal_energy_loss+self.move_energy_cost)
 		agents_energy = jnp.where(agents.alive, agents.energy-energy_loss, 0.0)
 		agents = agents._replace(position=positions, energy=agents_energy)
 

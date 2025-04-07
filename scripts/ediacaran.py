@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.devo.ctrnn import CTRNN
-from src.eco.gridworld import (GridWorld,
+from src.eco.gridworld import (Agent, GridWorld,
 							   EnvState,
 							   FoodType,
 							   ChemicalType,
@@ -30,58 +30,62 @@ class Config(NamedTuple):
 	# --- log
 	wandb_log: bool=False
 	# --- world
-	size: tuple[int,int]=(512,512)
-	max_agents: int=10_000
-	birth_pool_size: int=2048
-	cast_policy_states_to_f16: bool=False
+	size:            tuple[int,int] = (512,512)
+	max_agents:      int            = 10_000
+	birth_pool_size: int            = 2048
+	cast_to_f16:     bool           = False
 	# --- food
-	n_food_types: int=1
-	reproduction_rate: float=1e-2
-	spontaneous_grow_prob: float=1e-6
-	initial_food_density: float=1e-3
-	energy_concentration: float=1.0
-	diffusion_rate: float=20.0
+	n_food_types:          int   = 1
+	reproduction_rate:     float = 1e-2
+	spontaneous_grow_prob: float = 1e-6
+	initial_food_density:  float = 1e-3
+	energy_concentration:  float = 1.0
+	diffusion_rate:        float = 20.0
 	# --- agents
-	initial_agents: int=256
-	reproduction_cost: float=0.5
-	move_cost: float=0.1
-	max_energy: float=20.0
-	base_energy_loss: float=0.1
-	time_below_threshold_to_die: int=30
-	time_above_threshold_to_reproduce: int=50
-	max_age: int=200
+	initial_agents: 					int   = 256
+	max_energy: 						float = 20.0
+	base_energy_loss: 					float = 0.1
+	reproduction_cost: 					float = 0.5
+	move_cost: 							float = 0.1
+	applied_force_energy_cost: 			float = 0.1
+	s_expression_energy_cost: 			float = 0.1
+	m_expression_energy_cost: 			float = 0.1
+	neurons_energy_cost: 				float = 0.1
+	time_below_threshold_to_die: 		int   = 30
+	time_above_threshold_to_reproduce: 	int   = 50
+	max_age: 							int   = 200
 	# --- sensor interface
-	fov: int=1
-	sensor_expression_threshold: float=0.03
-	border_threshold: float=0.9
+	fov: 							int   = 1
+	sensor_expression_threshold: 	float = 0.03
+	border_threshold: 				float = 0.9
 	# --- motor interface
-	move_force_threshold: float=0.1 #minimum amount of force
-	motor_expression_threshold: float=0.03
-	force_threshold_to_move: float=0.1
-	neurons_max_motor_force: float=0.1
-	neurons_force_gain: float=0.1
-	passive_eating: bool=True
-	passive_reproduction: bool=True
+	move_force_threshold: 		float = 0.1 #minimum amount of force
+	motor_expression_threshold: float = 0.03
+	force_threshold_to_move: 	float = 0.1
+	neurons_max_motor_force: 	float = 0.1
+	neurons_force_gain: 		float = 0.1
+	passive_eating: 			bool  = True
+	passive_reproduction: 		bool  = True
 	# --- dev model
-	mdl: str="e"
-	max_neurons: int=128
-	n_synaptic_markers: int=4
-	max_types: int=8
-	T_dev: float=10.
-	dt_dev: float=0.1
-	temp_dcay: float=0.90
-	extra_migration_fields: int=3
-	N_gain: float=50.
-	connection_model: str="xoxt"
+	mdl: 					str   = "e"
+	max_neurons: 			int   = 128
+	n_synaptic_markers: 	int   = 4
+	max_types: 				int   = 8
+	T_dev: 					float = 10.
+	dt_dev: 				float = 0.1
+	temp_decay: 			float = 0.90
+	extra_migration_fields: int   = 3
+	N_gain: 				float = 50.
+	connection_model: 		str   = "xoxt"
 	# --- ctrnn prms
-	T_ctrnn: float=0.5
-	dt_ctrnn: float=0.1
+	T_ctrnn: 	float = 0.5
+	dt_ctrnn: 	float = 0.1
 	# --- mutations
-	sigma_mut: float=0.03
-	p_mut: float=1e-3
-	p_duplicate: float=1e-3
-	p_rm: float=1e-3
-	p_add: float=1e-3
+	sigma_mut: 		float = 0.03
+	p_mut: 			float = 1e-3
+	p_duplicate: 	float = 1e-3
+	p_rm: 			float = 1e-3
+	p_add: 			float = 1e-3
 
 
 def sensory_expression(
@@ -224,7 +228,7 @@ def simulate(cfg: Config):
 						    motor_dimensions=motor_dimensions,
 						    dt=cfg.dt_dev,
 						    dvpt_time=cfg.T_dev,
-						    temperature_decay=cfg.temp_dcay,
+						    temperature_decay=cfg.temp_decay,
 						    extra_migration_fields=cfg.extra_migration_fields,
 						    N_gain=cfg.N_gain,
 						    policy_cfg=interface,
@@ -265,7 +269,7 @@ def simulate(cfg: Config):
 	prms_shaper = ex.ParameterReshaper(_dummy_prms)
 	_agent_apply, _agent_init = make_apply_init(_dummy_model)
 
-	if cfg.cast_policy_states_to_f16:
+	if cfg.cast_to_f16:
 		def _cast_tree(tree: PyTree):
 			return jax.tree.map(
 				lambda x: x.astype(jnp.float16) if jnp.issubdtype(x.dtype, jnp.floating) else x,
@@ -313,6 +317,37 @@ def simulate(cfg: Config):
 
 	#-------------------------------------------------------------------
 
+	if cfg.mdl=="e":
+
+		def _state_energy_cost_fn(state: Agent):
+			""""""
+			net: CTRNN = state.policy_state
+			# ---
+			assert net.mask is not None
+			# ---
+			nb_neurons = net.mask.sum()
+			s_expressed = sensory_expression(net, expression_threshold=cfg.sensor_expression_threshold)
+			m_expressed = motor_expression(net, 
+										   border_threshold=cfg.border_threshold, 
+										   expression_threshold=cfg.motor_expression_threshold)
+			total_applied_force = jnp.sum(jnp.clip(net.v*m_expressed*cfg.neurons_force_gain, 0.0, cfg.neurons_max_motor_force))
+
+			total_cost = (nb_neurons 			* cfg.neurons_energy_cost
+						  + s_expressed 		* cfg.s_expression_energy_cost
+						  + m_expressed 		* cfg.m_expression_energy_cost
+						  + total_applied_force * cfg.applied_force_energy_cost)
+
+
+			return jnp.zeros((), dtype=jnp.float16)
+
+		state_energy_cost_fn = _state_energy_cost_fn
+
+	else:
+
+		state_energy_cost_fn = lambda state: jnp.zeros((), jnp.float16)
+
+	#-------------------------------------------------------------------
+
 	n = cfg.n_food_types
 	
 	food_types = FoodType(
@@ -338,6 +373,7 @@ def simulate(cfg: Config):
 		# ---
 		move_energy_cost=cfg.move_cost,
 		reproduction_energy_cost=cfg.reproduction_cost,
+		state_energy_cost_fn=state_energy_cost_fn,
 		base_energy_loss=cfg.base_energy_loss,
 		time_below_threshold_to_die=cfg.time_below_threshold_to_die,
 		time_above_threshold_to_reproduce=cfg.time_above_threshold_to_reproduce,
@@ -418,6 +454,7 @@ def simulate(cfg: Config):
 			"avg_age": masked_mean(state.agents.age, alive),
 			"generations": state.agents.generation,
 			"avg_generation": masked_mean(state.agents.generation, alive),
+			"genotypes": state.agents.prms,
 			# --- ACTIONS
 			"nb_moved": masked_sum(have_moved, alive),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
@@ -437,7 +474,7 @@ def simulate(cfg: Config):
 
 		return log_data, {}, 0
 
-	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations"]
+	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations", "genotypes"]
 
 	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
 			  				  "nb_inters", "active_types", "expressed_types"]
@@ -538,7 +575,7 @@ if __name__ == '__main__':
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
 		birth_pool_size=16, max_neurons=64, wandb_log=False, energy_concentration=100.,
-		initial_food_density=1.0, mdl="e", cast_policy_states_to_f16=True)
+		initial_food_density=1.0, mdl="e", cast_to_f16=True)
 	state, tools = simulate(cfg)
 	world = tools["world"]
 	plt.show()
