@@ -52,6 +52,7 @@ class Config(NamedTuple):
 	s_expression_energy_cost: 			float = 0.0
 	m_expression_energy_cost: 			float = 0.0
 	neurons_energy_cost: 				float = 0.0
+	connection_cost:					float = 0.0
 	time_below_threshold_to_die: 		int   = 30
 	time_above_threshold_to_reproduce: 	int   = 50
 	max_age: 							int   = 200
@@ -327,16 +328,19 @@ def simulate(cfg: Config):
 			assert net.mask is not None
 			# ---
 			nb_neurons = net.mask.sum()
-			s_expressed = sensory_expression(net, expression_threshold=cfg.sensor_expression_threshold)
+			s_expressed = jnp.abs(sensory_expression(net, expression_threshold=cfg.sensor_expression_threshold))
 			m_expressed = motor_expression(net, 
 										   border_threshold=cfg.border_threshold, 
 										   expression_threshold=cfg.motor_expression_threshold)
+			D = jnp.linalg.norm(net.x[:,None]-net.x[None], axis=-1)
+			connection_materials = jnp.abs(net.W) * D
 			total_applied_force = jnp.sum(jnp.clip(net.v*m_expressed*cfg.neurons_force_gain, 0.0, cfg.neurons_max_motor_force))
 
-			total_cost = (nb_neurons 			 * cfg.neurons_energy_cost
-						  + jnp.sum(s_expressed) * cfg.s_expression_energy_cost
-						  + jnp.sum(m_expressed) * cfg.m_expression_energy_cost
-						  + total_applied_force  * cfg.applied_force_energy_cost)
+			total_cost = (nb_neurons 			 		  * cfg.neurons_energy_cost
+						  + jnp.sum(s_expressed) 		  * cfg.s_expression_energy_cost
+						  + jnp.sum(m_expressed) 		  * cfg.m_expression_energy_cost
+						  + total_applied_force  		  * cfg.applied_force_energy_cost
+						  + jnp.sum(connection_materials) * cfg.connection_cost)
 
 
 			return total_cost.astype(jnp.float16)
@@ -421,6 +425,7 @@ def simulate(cfg: Config):
 			networks = state.agents.policy_state
 			nb_sensors, nb_motors, nb_sensorimotors, nb_inters = jax.vmap(count_implicit_types)(networks)
 			prms: PyTree = prms_shaper.reshape(state.agents.prms)
+			types_vector = jax.vmap(lambda tree: ravel_pytree(tree)[0])(prms.types)
 			active_types = prms.types.active.sum(-1)
 			expressed_types = jnp.sum(jnp.round(prms.types.pi * prms.types.active * cfg.N_gain) > 0.0, axis=-1)
 			model_metrics = {
@@ -438,6 +443,7 @@ def simulate(cfg: Config):
 				"avg_active_types": masked_mean(active_types, alive),
 				"expressed_types": expressed_types,
 				"avg_expressed_types": masked_mean(expressed_types, alive),
+				"types_vector": types_vector
 			}
 		else:
 			model_metrics = {}
@@ -456,7 +462,10 @@ def simulate(cfg: Config):
 			"generations": state.agents.generation,
 			"avg_generation": masked_mean(state.agents.generation, alive),
 			"genotypes": state.agents.prms.astype(jnp.float16),
+			"offsprings": state.agents.n_offsprings,
+			"avg_offsprings": masked_mean(state.agents.n_offsprings, alive), 
 			# --- ACTIONS
+			"moving": have_moved,
 			"nb_moved": masked_sum(have_moved, alive),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"energy_intakes": step_data["energy_intakes"],
@@ -477,11 +486,17 @@ def simulate(cfg: Config):
 
 		return log_data, {}, 0
 
-	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations", "genotypes"]
+	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations", "genotypes", 
+					  "moving", "offsprings"]
 
 	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
 			  				  "nb_inters", "active_types", "expressed_types",
-			  				  "network_sizes"]
+			  				  "network_sizes", "types_vector"]
+
+	all_fields_to_mask = fields_to_mask
+
+	if cfg.mdl=="e":
+		all_fields_to_mask.extend(model_e_fields_to_mask)
 
 
 
@@ -493,17 +508,10 @@ def simulate(cfg: Config):
 
 		alive = data["alive"]
 
-
-		for field in fields_to_mask:
+		for field in all_fields_to_mask:
 			data[field] = data[field][alive]
 
-		table_fields = ["genotypes", "generations", "energy_levels"]
-
-		if cfg.mdl=="e":
-			for field in model_e_fields_to_mask:
-				data[field] = data[field][alive]
-			table_fields.extend(model_e_fields_to_mask)
-
+		table_fields = all_fields_to_mask
 		log_step = wandb.run._step
 		if not log_step % cfg.log_table_freq:
 			n_rows = data[table_fields[0]].shape[0]
@@ -514,6 +522,8 @@ def simulate(cfg: Config):
 
 		del data["alive"]
 		del data["genotypes"]
+		del data["generations"]
+		del data["moving"]
 
 		return data
 
