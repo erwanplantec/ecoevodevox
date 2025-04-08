@@ -524,6 +524,7 @@ def simulate(cfg: Config):
 		del data["genotypes"]
 		del data["generations"]
 		del data["moving"]
+		del data["types_vector"]
 
 		return data
 
