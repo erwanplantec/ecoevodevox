@@ -487,7 +487,7 @@ def simulate(cfg: Config):
 		return log_data, {}, 0
 
 	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations", "genotypes", 
-					  "moving", "offsprings"]
+					  "moving", "offsprings", "agents_pos"]
 
 	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
 			  				  "nb_inters", "active_types", "expressed_types",
@@ -525,6 +525,8 @@ def simulate(cfg: Config):
 		del data["generations"]
 		del data["moving"]
 		del data["types_vector"]
+		del data["food_map"]
+		del data["agents_pos"]
 
 		return data
 
