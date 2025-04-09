@@ -283,6 +283,7 @@ class GridWorld:
 
 		dead = (agents_tbt > self.time_below_threshold_to_die) | (agents.age > self.max_age)
 		dead = dead & agents.alive
+		avg_dead_age = jnp.where(dead, agents.age, 0).sum() / dead.sum() #type:ignore
 		agents_alive = agents.alive & ( ~dead )
 		agents_age = jnp.where(agents_alive, agents.age, 0)
 		agents = agents._replace(alive=agents_alive, time_above_threshold=agents_tat, time_below_threshold=agents_tbt, age=agents_age)
@@ -383,7 +384,8 @@ class GridWorld:
 			agents=agents, 
 			last_agent_id=agents.id_.max(),
 		)
-		return state, dict(reproducing=reproducing, dying=dead)
+		
+		return state, dict(reproducing=reproducing, dying=dead, avg_dead_age=avg_dead_age)
 
 	# ---
 

@@ -103,6 +103,8 @@ class MLPConn(nn.MLP):
     def __call__(self, x_pre, x_post): #type:ignore
         return super().__call__(jnp.concatenate([x_pre,x_post]))
 
+# ======================================================
+
 
 dummy_policy_config = CTRNNPolicyConfig(lambda x:x, lambda x:x)
     
@@ -380,7 +382,6 @@ prms_sample_min = lambda prms_like: eqx.tree_at(
         jnp.full_like(prms_like.types.gamma, 1e-8)
     ]
 )
-
 
 prms_sample_max = lambda prms_like: eqx.tree_at(
     lambda x: x.types.theta,

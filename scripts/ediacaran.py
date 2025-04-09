@@ -190,29 +190,21 @@ def gridworld_motor_interface(
 	move = move * (jnp.abs(largest_component)>threshold_to_move)
 	return move
 
+#-------------------------------------------------------------------
 
-
-def simulate(cfg: Config):
-
-	#-------------------------------------------------------------------
-
-	assert cfg.birth_pool_size<=cfg.max_agents
-
-	#-------------------------------------------------------------------
-
+def make_agents_model(cfg: Config):
+	"""
+	"""
 	interface = CTRNNPolicyConfig(
-
 		encode_fn=partial(gridworld_sensory_interface, 
 						  fov=cfg.fov, 
 						  border_threshold=cfg.border_threshold,
 						  expression_threshold=cfg.sensor_expression_threshold),
-		
 		decode_fn=partial(gridworld_motor_interface, 
 						  threshold_to_move=cfg.force_threshold_to_move,
 						  border_threshold=cfg.border_threshold, 
 						  neurons_force_gain=cfg.neurons_force_gain,
 						  neurons_max_force=cfg.neurons_max_motor_force),
-		
 		T=cfg.T_ctrnn, 
 
 		dt=cfg.dt_ctrnn
@@ -267,8 +259,6 @@ def simulate(cfg: Config):
 		raise NameError(f"model {cfg.mdl} is not valid")
 
 	_dummy_model = model_factory(jr.key(0))
-	_dummy_prms = eqx.filter(_dummy_model, eqx.is_array)
-	prms_shaper = ex.ParameterReshaper(_dummy_prms)
 	_agent_apply, _agent_init = make_apply_init(_dummy_model)
 
 	if cfg.cast_to_f16:
@@ -293,6 +283,23 @@ def simulate(cfg: Config):
 		agent_init = _agent_init
 		agent_apply = _agent_apply
 
+	return _dummy_model, agent_init, agent_apply
+
+#-------------------------------------------------------------------
+
+
+def simulate(cfg: Config):
+
+	#-------------------------------------------------------------------
+
+	assert cfg.birth_pool_size<=cfg.max_agents
+
+	#-------------------------------------------------------------------
+
+	dummy_model, agent_init, agent_apply = make_agents_model(cfg)
+	dummy_prms = eqx.filter(dummy_model, eqx.is_array)
+	prms_shaper = ex.ParameterReshaper(dummy_prms)
+	
 	#-------------------------------------------------------------------
 
 	if cfg.mdl=="e":
@@ -314,7 +321,7 @@ def simulate(cfg: Config):
 	_ravel_pytree = lambda x: ravel_pytree(x)[0]
 
 	agent_prms_fctry = lambda key: mutation_fn(_ravel_pytree(
-		eqx.filter(_dummy_model, eqx.is_array)
+		eqx.filter(dummy_model, eqx.is_array)
 	), key)
 
 	#-------------------------------------------------------------------
@@ -420,6 +427,9 @@ def simulate(cfg: Config):
 		actions = step_data["actions"]
 		alive = state.agents.alive
 		have_moved = ~jnp.all(actions == jnp.zeros(2, dtype=actions.dtype)[None], axis=-1)
+		# ---
+		observations = step_data["observations"]
+		# ---
 
 		if cfg.mdl=="e":
 			networks = state.agents.policy_state
@@ -453,6 +463,7 @@ def simulate(cfg: Config):
 			"alive": alive,
 			"population": alive.sum(),
 			"nb_dead": jnp.sum(step_data["dying"]),
+			"avg_dead_age": step_data["avg_dead_age"],
 			"energy_levels": state.agents.energy,
 			"nb_above_threshold": masked_sum(state.agents.energy>0.0, alive),
 			"nb_below_threshold": masked_sum(state.agents.energy<0.0, alive),
@@ -465,11 +476,14 @@ def simulate(cfg: Config):
 			"offsprings": state.agents.n_offsprings,
 			"avg_offsprings": masked_mean(state.agents.n_offsprings, alive), 
 			# --- ACTIONS
+			"actions": actions,
 			"moving": have_moved,
 			"nb_moved": masked_sum(have_moved, alive),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"energy_intakes": step_data["energy_intakes"],
 			"avg_energy_intake": masked_mean(step_data["energy_intakes"], alive),
+			# --- OBS
+			"obs_C": observations.chemicals,
 			# --- NETWORKS
 			**model_metrics,
 			# --- FOOD
@@ -487,7 +501,7 @@ def simulate(cfg: Config):
 		return log_data, {}, 0
 
 	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations", "genotypes", 
-					  "moving", "offsprings", "agents_pos"]
+					  "moving", "offsprings", "agents_pos", "actions"]
 
 	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
 			  				  "nb_inters", "active_types", "expressed_types",
@@ -516,7 +530,11 @@ def simulate(cfg: Config):
 		if not log_step % cfg.log_table_freq:
 			n_rows = data[table_fields[0]].shape[0]
 			table_columns = [data[field] for field in table_fields]
-			table_data = [[col[r] if field!="genotypes" else list(col[r]) for col, field in zip(table_columns, table_fields)]+[log_step] for r in range(n_rows)]
+			table_data = [
+				[col[r] if field in ("genotypes","types_vector") 
+						else list(col[r]) 
+				 for col, field in zip(table_columns, table_fields)]+[log_step] 
+			for r in range(n_rows)]
 			table = wandb.Table(columns=table_fields+["_step"], data=table_data)
 			data["population_data"] = table
 
@@ -527,6 +545,7 @@ def simulate(cfg: Config):
 		del data["types_vector"]
 		del data["food_map"]
 		del data["agents_pos"]
+		del data["actions"]
 
 		return data
 
@@ -566,6 +585,8 @@ def simulate(cfg: Config):
 	if cfg.wandb_log:
 		wandb.init(project="eedx_ediacaran", config=cfg._asdict())
 
+	total_env_steps = 0
+
 	while True:
 
 		cmd_and_args = input("cmd: ").strip()
@@ -579,6 +600,7 @@ def simulate(cfg: Config):
 			steps = int(args[0])
 			key_sim, _key = jr.split(key_sim)
 			state = jax.block_until_ready(simulate_n_steps(state, _key, steps))
+			total_env_steps += steps
 
 		elif cmd=="ss":
 			key_sim, _key = jr.split(key_sim)
@@ -589,7 +611,7 @@ def simulate(cfg: Config):
 			log = args[0] if args else False
 			if log and cfg.wandb_log:
 				print("...logging figure to wandb")
-				wandb.log({"env_render": wandb.Image(fig)}, commit=False)
+				wandb.log({f"env_render: step={total_env_steps}": wandb.Image(fig)}, commit=False)
 			plt.show()
 
 		elif cmd=="q":
@@ -611,7 +633,7 @@ if __name__ == '__main__':
 	warnings.filterwarnings('error', category=FutureWarning)
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
-		birth_pool_size=16, max_neurons=64, wandb_log=True, energy_concentration=100.,
+		birth_pool_size=16, max_neurons=64, wandb_log=False, energy_concentration=100.,
 		initial_food_density=1.0, mdl="e", cast_to_f16=True)
 	state, tools = simulate(cfg)
 	world = tools["world"]
