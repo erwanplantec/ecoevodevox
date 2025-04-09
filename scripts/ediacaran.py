@@ -27,6 +27,7 @@ from src.devo.utils import make_apply_init
 
 class Config(NamedTuple):
 	seed: int=0
+	debug: bool=False
 	# --- log
 	wandb_log: bool=False
 	log_table_freq: int=2
@@ -527,11 +528,12 @@ def simulate(cfg: Config):
 
 		table_fields = all_fields_to_mask
 		log_step = wandb.run._step
+		
 		if not log_step % cfg.log_table_freq:
 			n_rows = data[table_fields[0]].shape[0]
 			table_columns = [data[field] for field in table_fields]
 			table_data = [
-				[col[r] if field in ("genotypes","types_vector") 
+				[col[r] if field not in ("genotypes","types_vector") 
 						else list(col[r]) 
 				 for col, field in zip(table_columns, table_fields)]+[log_step] 
 			for r in range(n_rows)]
@@ -583,7 +585,7 @@ def simulate(cfg: Config):
 	state = world.reset(key_init)
 
 	if cfg.wandb_log:
-		wandb.init(project="eedx_ediacaran", config=cfg._asdict())
+		wandb.init(project="eedx_ediacaran" if not cfg.debug else "DEBUG" , config=cfg._asdict())
 
 	total_env_steps = 0
 
@@ -633,8 +635,8 @@ if __name__ == '__main__':
 	warnings.filterwarnings('error', category=FutureWarning)
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
-		birth_pool_size=16, max_neurons=64, wandb_log=False, energy_concentration=100.,
-		initial_food_density=1.0, mdl="e", cast_to_f16=True)
+		birth_pool_size=16, max_neurons=64, wandb_log=True, energy_concentration=100.,
+		initial_food_density=1.0, mdl="e", cast_to_f16=True, debug=True)
 	state, tools = simulate(cfg)
 	world = tools["world"]
 	plt.show()
