@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 from typing import Callable, NamedTuple, Tuple, TypeVar
 from jaxtyping import (
-	PyTree, Array,
+	Float, PyTree, Array,
 	Bool,
 	Int16, Int32,
 	UInt8, UInt16, UInt32,
@@ -25,11 +25,65 @@ from jaxtyping import (
 
 from .utils import *
 
-type FoodMap = UInt8[Array, "F H W"]
+type FoodMap = Bool[Array, "F H W"]
 type KeyArray = jax.Array
 type AgentState = PyTree
 type AgentParams = jax.Array
 type Action = jax.Array
+
+def make_growth_convolution(env_size: tuple[int,int],
+							reproduction_rates: jax.Array,
+							dmins: jax.Array,
+							dmaxs: jax.Array,
+							inhib: float=-1.0,
+							dtype: type=jnp.float32):
+	"""Creates convolution function for food growth probabilities"""
+	# ---
+	H, W = env_size
+	# ---
+	assert (not H%2) and (not W%2)
+	# ---
+	mH, mW = H//2, W//2
+	L = jnp.mgrid[-mH:mH,-mW:mW]
+	D = jnp.linalg.norm(L, axis=0, keepdims=True)
+
+	growth_kernels = ((D>=dmins[:,None,None]) & (D<=dmaxs[:,None,None])).astype(jnp.float32)
+	growth_kernels = growth_kernels / growth_kernels.sum(axis=(1,2), keepdims=True)
+	growth_kernels = growth_kernels * reproduction_rates[:,None,None]
+	growth_kernels = jnp.where(D<dmins[:,None,None], inhib, growth_kernels); assert isinstance(growth_kernels,jax.Array)
+	growth_kernels_fft = jnp.fft.fft2(jnp.fft.fftshift(growth_kernels, axes=(1,2))).astype(dtype)
+
+	@jax.jit
+	def _conv(F: Bool[Array, "F H W"])->jax.Array:
+		F_fft = jnp.fft.fft2(F.astype(dtype))
+		P = jnp.real(jnp.fft.ifft2(F_fft*growth_kernels_fft))
+		P = jnp.where((P<0)|jnp.isclose(P,0.0), 0.0, P); assert isinstance(P, jax.Array)
+		return P
+
+	return _conv
+
+def make_chemical_diffusion_convolution(env_size: tuple[int,int],
+										diffusion_rates: jax.Array):
+	# ---
+	H, W = env_size
+	# ---
+	assert (not H%2) and (not W%2)
+	# ---
+	mH, mW = H//2, W//2
+	L = jnp.mgrid[-mH:mH,-mW:mW]
+	D = jnp.linalg.norm(L, axis=0, keepdims=True) #1,H,W
+
+	diffusion_kernels = jnp.exp(-D/diffusion_rates[:,None,None]); assert isinstance(diffusion_kernels, jax.Array)
+	diffusion_kernels_fft = jnp.fft.fft2(jnp.fft.fftshift(diffusion_kernels, axes=(1,2)))
+
+	@jax.jit
+	def _conv(C: Float[jax.Array, "C H W"])->Float[jax.Array, "C H W"]:
+		C_fft = jnp.fft.fft2(C)
+		res = jnp.real(jnp.fft.ifft2(C_fft * diffusion_kernels_fft))
+		return res
+
+	return _conv
+
 
 # ============================================================
 
@@ -58,15 +112,13 @@ class ChemicalType(NamedTuple):
 	diffusion_rate: Float16
 
 class FoodType(NamedTuple):
-	reproduction_rate: Float16
-	expansion_rate: Float16
-	max_concentration: UInt8
-	chemical_signature: Float16
-	energy_concentration: Float16
-	spontaneous_grow_prob: Float16
-	initial_density: Float16
-
-_food_types_types = FoodType(f16, f16, ui8, f16, f16, f16, f16)
+	growth_rate: Float32
+	dmin: Float32
+	dmax: Float32
+	chemical_signature: Float32
+	energy_concentration: Float32
+	spontaneous_grow_prob: Float32
+	initial_density: Float32
 
 class EnvState(NamedTuple):
 	agents: Agent
@@ -120,21 +172,19 @@ class GridWorld:
 		size_init_minibatches: int|None=None):
 		
 		self.size = size
-		self.walls = jnp.pad(jnp.zeros([s-2 for s in self.size], dtype=f16), 1, constant_values=1)
+		self.walls = jnp.zeros(self.size)
 		self.deadly_walls = deadly_walls
 
-		self.food_types = jax.tree.map(lambda x, ty: x.astype(ty), food_types, _food_types_types)
-		self.nb_food_types = food_types.reproduction_rate.shape[0]
-		growth_kernels = jnp.stack([jnp.array([[0.0, r/4, 0.0],
-					       					   [r/4, 1-r, r/4],
-					       					   [0.0, r/4, 0.0]], dtype=f16) for r in self.food_types.expansion_rate])
-		self.food_growth_kernels = growth_kernels * self.food_types.reproduction_rate[:,None,None]
+		self.food_types = jax.tree.map(lambda x: x.astype(jnp.float16), food_types)
+		self.nb_food_types = food_types.growth_rate.shape[0]
+		self.growth_conv = make_growth_convolution(self.size, 
+												   food_types.growth_rate,
+												   food_types.dmin, 
+												   food_types.dmax)
 	
 		self.chemical_types = chemical_types
-		sx, sy = self.size
-		norms = jnp.linalg.norm(jnp.mgrid[-sx//2:sx//2, -sy//2:sy//2], axis=0)
-		diffusion_rates = self.chemical_types.diffusion_rate
-		self.chemicals_diffusion_kernels = jnp.stack([jnp.exp(-norms/r) for r in diffusion_rates])
+		self.chemicals_diffusion_conv = make_chemical_diffusion_convolution(self.size,
+																			chemical_types.diffusion_rate)
 
 		self.mutation_fn = mutation_fn
 		self.agent_fctry = agent_fctry
@@ -204,11 +254,13 @@ class GridWorld:
 		# --- 2. Get and apply actions ---
 		key, key_action = jr.split(key)
 		observations = self._get_observations(state)
+		
 		actions, policy_states = self.mapped_agent_apply(state.agents.prms, 
 														 observations, 
 														 state.agents.policy_state, 
 														 jr.split(key_action, self.max_agents), 
 														 state.agents.alive)
+		actions = actions.astype(jnp.int16)
 		state = eqx.tree_at(lambda s: s.agents.policy_state, state, policy_states)
 		state, actions_data = self._apply_actions(state, actions)
 
@@ -384,7 +436,7 @@ class GridWorld:
 			agents=agents, 
 			last_agent_id=agents.id_.max(),
 		)
-		
+
 		return state, dict(reproducing=reproducing, dying=dead, avg_dead_age=avg_dead_age)
 
 	# ---
@@ -394,7 +446,7 @@ class GridWorld:
 		returns agents observations
 		"""
 		chemical_fields = jnp.sum(state.food[:,None] * self.food_types.chemical_signature[...,None,None], axis=0)
-		chemical_fields = jax.vmap(lambda x, k: jsp.signal.convolve(x, k, mode="same", method="fft"))(chemical_fields, self.chemicals_diffusion_kernels)
+		chemical_fields = self.chemicals_diffusion_conv(chemical_fields)
 
 		agents = state.agents
 		agents_i, agents_j = agents.position.T
@@ -470,7 +522,7 @@ class GridWorld:
 		agents_energy = jnp.clip(agents.energy + agents_energy_intake, -jnp.inf, self.max_energy)
 
 		agents = agents._replace(energy=agents_energy)
-		food = jnp.where(eating_agents_grid[None]>0, 0, food)
+		food = jnp.where(eating_agents_grid[None]>0, False, food)
 
 		# --- 4. Reproduce ---
 		# agents reproduce if :
@@ -481,13 +533,13 @@ class GridWorld:
 		reproduce = reproduce & (agents.time_above_threshold > self.time_above_threshold_to_reproduce)
 		agents = agents._replace(reproduce=reproduce)
 
-		return state._replace(agents=agents, food=food), {"energy_intakes":agents_energy_intake}
+		return state._replace(agents=agents, food=food), {"energy_intakes":agents_energy_intake, "energy_loss": energy_loss}
 
 	# ====================== FOOD =========================
 
 	@property
 	def n_food_types(self):
-		return self.food_types.reproduction_rate.shape[0]
+		return self.food_types.growth_rate.shape[0]
 
 	def _init_food(self, key)->FoodMap:
 		food = jr.bernoulli(key, self.food_types.initial_density[:,None,None], (self.n_food_types, *self.size)).astype(ui8)
@@ -500,13 +552,16 @@ class GridWorld:
 		"""Do one step of food growth"""
 		food = state.food
 		# --- Grow ---
-		p_grow = jax.vmap(partial(jsp.signal.convolve2d, mode="same"))(food, self.food_growth_kernels)
-		agents_i, agents_j = state.agents.position.T
-		agents_grid = jnp.zeros(self.size, dtype=ui8).at[agents_i,agents_j].add(state.agents.alive.astype(ui8)) > 0
-		p_grow = jnp.where(agents_grid, 0.0, p_grow)
-		grow = jr.bernoulli(key, p_grow).astype(ui8)
-		grow = jnp.where((jnp.cumsum(food, axis=0)>1)|(jnp.cumsum(food, axis=0)>1), 0, grow)
-		food = jnp.clip(food + grow, 0, self.food_types.max_concentration[:,None,None])
+		p_grow = self.growth_conv(food); assert isinstance(p_grow, jax.Array)
+		p_grow = jnp.where(jnp.any(food, axis=0, keepdims=True), 0.0, p_grow)
+		grow = jr.bernoulli(key, p_grow)
+		grow = jnp.where(
+			jnp.cumsum(grow.astype(jnp.uint4),axis=0)>1,
+			False,
+			grow
+		)
+
+		food = food | grow
 
 		return state._replace(food=food)
 
@@ -528,7 +583,7 @@ class GridWorld:
 
 		img = jnp.ones((F,H,W,4)) * food_colors[:,None,None]
 		img = jnp.clip(jnp.where(food[...,None], img, 0.).sum(0), 0.0, 1.0) #type:ignore
-		img = img.at[:,:,-1].set((food/self.food_types.max_concentration.max()).sum(0))
+		img = img.at[:,:,-1].set(jnp.any(food, axis=0))
 
 		ai, aj = agents.position[agents.alive].T
 		img = img.at[ai,aj].set(jnp.array([0.,0.,0.,1.]))

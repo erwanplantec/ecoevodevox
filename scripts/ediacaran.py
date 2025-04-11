@@ -37,12 +37,14 @@ class Config(NamedTuple):
 	birth_pool_size: int            = 2048
 	cast_to_f16:     bool           = False
 	# --- food
-	n_food_types:          int   = 1
-	reproduction_rate:     float = 1e-2
-	spontaneous_grow_prob: float = 1e-6
-	initial_food_density:  float = 1e-3
-	energy_concentration:  float = 1.0
-	diffusion_rate:        float = 20.0
+	n_food_types:         	int   = 1
+	growth_rate:  			float = 1e-2
+	min_growth_dist: 		float = 1.0
+	max_growth_dist: 		float = 1.0
+	spontaneous_grow_prob: 	float = 1e-6
+	initial_food_density:  	float = 1e-3
+	energy_concentration:  	float = 1.0
+	diffusion_rate:        	float = 20.0
 	# --- agents
 	initial_agents: 					int   = 256
 	max_energy: 						float = 20.0
@@ -365,9 +367,9 @@ def simulate(cfg: Config):
 	
 	food_types = FoodType(
 		chemical_signature=jnp.identity(n),
-		reproduction_rate=jnp.full((n,), cfg.reproduction_rate),
-		expansion_rate=jnp.ones(n), 
-		max_concentration=jnp.ones(n),
+		growth_rate=jnp.full((n,), cfg.growth_rate),
+		dmin=jnp.full((n,), cfg.min_growth_dist),
+		dmax=jnp.full((n,), cfg.max_growth_dist),
 		energy_concentration=jnp.full((n,), cfg.energy_concentration),
 		spontaneous_grow_prob=jnp.full(n, cfg.spontaneous_grow_prob),
 		initial_density=jnp.full(n, cfg.initial_food_density)
@@ -528,7 +530,7 @@ def simulate(cfg: Config):
 
 		table_fields = all_fields_to_mask
 		log_step = wandb.run._step
-		
+
 		if not log_step % cfg.log_table_freq:
 			n_rows = data[table_fields[0]].shape[0]
 			table_columns = [data[field] for field in table_fields]
@@ -635,7 +637,7 @@ if __name__ == '__main__':
 	warnings.filterwarnings('error', category=FutureWarning)
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
-		birth_pool_size=16, max_neurons=64, wandb_log=True, energy_concentration=100.,
+		birth_pool_size=16, max_neurons=64, wandb_log=False, energy_concentration=100.,
 		initial_food_density=1.0, mdl="e", cast_to_f16=True, debug=True)
 	state, tools = simulate(cfg)
 	world = tools["world"]

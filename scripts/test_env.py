@@ -28,14 +28,15 @@ base_cost = 0.1
 # --- Food ---
 n_food = n_chemicals = 1
 food_types = FoodType(
-	reproduction_rate=jnp.array([0.2]*n_food, dtype=jnp.float16),
-	expansion_rate=jnp.array([1.]*n_food, dtype=jnp.float16),
-	max_concentration=jnp.array([1]*n_food,dtype=jnp.int16),
+	growth_rate=jnp.array([0.2]*n_food, dtype=jnp.float16),
+	dmin=jnp.array([4.]),
+	dmax=jnp.array([8.]),
 	energy_concentration=jnp.array([1.0]*n_food, dtype=jnp.float16),
 	chemical_signature=jnp.identity(n_chemicals, dtype=jnp.float16),
-	spontaneous_grow_prob=jnp.zeros(n_food, dtype=jnp.float16)
+	spontaneous_grow_prob=jnp.zeros(n_food, dtype=jnp.float16),
+	initial_density=jnp.array([0.001])
 )
-chemical_types = ChemicalType(diffusion_rate=jnp.array([5.0]*n_chemicals))
+chemical_types = ChemicalType(diffusion_rate=jnp.array([1.0]*n_chemicals))
 initial_food_density = 0.005 / n_food
 
 # --- Agents ---
@@ -55,7 +56,7 @@ mutation_fn = partial(mutate_flat_generalized, sigma=sigma_mut, p=p_mut)
 
 env = GridWorld(env_size, agent_fctry, agent_init, agent_apply, mutation_fn, chemical_types, food_types,  #type:ignore
 	max_agents=max_agents, init_agents=init_agents, max_age=1_000, reproduction_energy_cost=reproduction_cost, 
-	move_energy_cost=move_cost, base_energy_loss=base_cost, initial_food_density=initial_food_density, 
+	move_energy_cost=move_cost, base_energy_loss=base_cost, 
 	initial_agent_energy=1.0,
 	time_above_threshold_to_reproduce=50, time_below_threshold_to_die=30,
 	passive_reproduction=True, passive_eating=True, predation=False,) 
@@ -84,10 +85,10 @@ for t in range(T):
 	state = jax.tree.map(lambda x: x[t], states)
 	env.render(state, ax[0])
 	chemical_fields = jnp.sum(state.food[:,None] * env.food_types.chemical_signature[...,None,None], axis=0)
-	chemical_fields = jax.vmap(lambda x, k: jsp.signal.convolve(x, k, mode="same", method="fft"))(chemical_fields, env.chemicals_diffusion_kernels)
-	#env.render(state._replace(food=chemical_fields), ax[1])
+	chemical_fields = env.chemicals_diffusion_conv(chemical_fields)
+	cmax = chemical_fields.max()
 	for i, C in enumerate(chemical_fields):
-		ax[1].imshow(C[...,None] * jnp.array(plt.cm.Set2(i))[None,None] / 100.)
+		ax[1].imshow(C[...,None] * jnp.array(plt.cm.Set2(i))[None,None] / cmax) #type:ignore
 	#ax[1].plot(energy_content[:t].sum(1), color=plt.cm.Set2(0))
 	cam.snap()
 ani = cam.animate(interval=100)
