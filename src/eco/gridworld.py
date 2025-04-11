@@ -267,7 +267,6 @@ class GridWorld:
 		# --- 3. Die / reproduce ---
 		state, update_agents_data = self._update_agents(state, key)
 
-		state = eqx.tree_at(lambda s: s.agents.age, state, state.agents.age+state.agents.alive)
 		state = state._replace(time=state.time+1)
 
 		return (
@@ -491,7 +490,7 @@ class GridWorld:
 
 		# --- 2. Move ---
 
-		new_positions = agents.position+actions
+		new_positions = jnp.mod(agents.position+actions, jnp.array(self.size, dtype=i16)[None])
 		hits_wall = self.walls[*new_positions.T].astype(bool) #type:ignore
 		
 		# --- update energy
