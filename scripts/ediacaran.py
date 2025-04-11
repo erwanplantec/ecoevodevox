@@ -29,8 +29,9 @@ class Config(NamedTuple):
 	seed: int=0
 	debug: bool=False
 	# --- log
-	wandb_log: bool=False
-	log_table_freq: int=2
+	wandb_log: bool=True
+	wandb_project: str="eedx"
+	log_table_freq: int=1_000
 	# --- world
 	size:            tuple[int,int] = (512,512)
 	max_agents:      int            = 10_000
@@ -158,7 +159,7 @@ def gridworld_motor_interface(
 	expression_threshold:float=0.03,
 	m_activation: Callable=lambda m: jnp.clip(m, 0.0, 1.0),
 	threshold_to_move: float=0.1,
-	neurons_force_gain: float=0.1,
+	neurons_force_gain: float=1.0,
 	neurons_max_force: float=0.1,
 	pos_dtype: type=jnp.int16):
 	# ---
@@ -166,7 +167,7 @@ def gridworld_motor_interface(
 	# --- 
 	xs = ctrnn.x
 	m = motor_expression(ctrnn, border_threshold, 
-		expression_threshold, m_activation)
+		expression_threshold, m_activation)[:,0]
 	v = ctrnn.v
 	# ---
 	xs = xs * jnn.one_hot(jnp.argmax(jnp.abs(xs), axis=-1), 2)
