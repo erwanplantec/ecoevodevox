@@ -186,6 +186,13 @@ class GridWorld:
 		self.chemicals_diffusion_conv = make_chemical_diffusion_convolution(self.size,
 																			chemical_types.diffusion_rate)
 
+		deltas = jnp.mgrid[-field_of_view:field_of_view+1, -field_of_view:field_of_view+1]
+		@jax.jit
+		def _vision_fn(x: jax.Array, pos: jax.Array):
+			indices = jnp.mod(pos[:,None,None]+deltas, jnp.array(self.size, dtype=i16)[:,None,None])
+			return x[:, *indices]
+		self.vision_fn = _vision_fn
+
 		self.mutation_fn = mutation_fn
 		self.agent_fctry = agent_fctry
 		self.agent_init = agent_init
@@ -455,13 +462,11 @@ class GridWorld:
 		chemical_fields = jnp.concatenate([agents_scent_field[None], chemical_fields],axis=0)
 		chemical_fields = jnp.where(chemical_fields<self.chemical_detection_threshold, 0.0, chemical_fields) #C,H,W
 
-		fov = self.field_of_view
-		padded_chemical_fields = jnp.pad(chemical_fields, [(0,0),(fov,fov),(fov,fov)])
-		agents_chemicals_inputs = jax.vmap(partial(k_neighborhood, k=fov), in_axes=(None,0,0))(padded_chemical_fields, agents_i+fov, agents_j+fov)
+		agents_chemicals_inputs = jax.vmap(self.vision_fn, in_axes=(None,0))(chemical_fields, agents.position)
 
 		agents_internal_inputs = jnp.concatenate([agents.energy[:,None], agents.reward[:,None]], axis=-1)
 
-		agents_walls_inputs = jax.vmap(moore_neighborhood, in_axes=(None,0,0))(self.walls[None], agents_i, agents_j)
+		agents_walls_inputs = jax.vmap(self.vision_fn, in_axes=(None,0))(self.walls[None], agents.position)
 
 		return Observation(chemicals=agents_chemicals_inputs, internal=agents_internal_inputs, walls=agents_walls_inputs)
 
