@@ -16,7 +16,7 @@ from src.evo.mutation import mutate_flat_generalized
 
 
 # --- Env ---
-env_size = (32, 64)
+env_size = (64, 64)
 max_agents = 1
 apply_mb = None
 birth_pool_size = max_agents
@@ -27,15 +27,19 @@ base_cost = 0.1
 
 # --- Food ---
 n_food = n_chemicals = 1
+dmin, dmax = 4., 5.
+growth_rate = 0.2 / (dmin**2)
+
 food_types = FoodType(
 	growth_rate=jnp.array([0.2]*n_food, dtype=jnp.float16),
-	dmin=jnp.array([4.]),
-	dmax=jnp.array([8.]),
+	dmin=jnp.array([4.]*n_food),
+	dmax=jnp.array([8.]*n_food),
 	energy_concentration=jnp.array([1.0]*n_food, dtype=jnp.float16),
 	chemical_signature=jnp.identity(n_chemicals, dtype=jnp.float16),
 	spontaneous_grow_prob=jnp.zeros(n_food, dtype=jnp.float16),
 	initial_density=jnp.array([0.001])
 )
+
 chemical_types = ChemicalType(diffusion_rate=jnp.array([1.0]*n_chemicals))
 initial_food_density = 0.005 / n_food
 
@@ -69,7 +73,6 @@ def step_fn(state, key):
 # --- Simulate ---
 
 state = env.reset(jr.key(0))
-
 
 state, data = jax.lax.scan(step_fn, state, jr.split(jr.key(3), 100))
 

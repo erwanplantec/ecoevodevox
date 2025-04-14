@@ -154,6 +154,8 @@ class GridWorld:
 		field_of_view: int=1,
 		birth_pool_size: int|None=None,
 		# ---
+		walls_density: float=0.0,
+		# ---
 		energy_reproduction_threshold: float=0.,
 		reproduction_energy_cost: float=0.5,
 		predation_energy_gain: float=5.,
@@ -167,12 +169,14 @@ class GridWorld:
 		time_below_threshold_to_die: int=10,
 		initial_agent_energy: float=1.0,
 		chemical_detection_threshold: float=0.01,
-		deadly_walls: bool=False,
+		deadly_walls: bool=True,
 		size_apply_minibatches: int|None=None,
-		size_init_minibatches: int|None=None):
+		size_init_minibatches: int|None=None,
+		*,
+		key: jax.Array):
 		
 		self.size = size
-		self.walls = jnp.zeros(self.size)
+		self.walls = jr.bernoulli(key, walls_density, self.size)
 		self.deadly_walls = deadly_walls
 
 		self.food_types = jax.tree.map(lambda x: x.astype(jnp.float16), food_types)

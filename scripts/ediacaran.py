@@ -33,10 +33,13 @@ class Config(NamedTuple):
 	wandb_project: str="eedx"
 	log_table_freq: int=1_000
 	# --- world
-	size:            tuple[int,int] = (512,512)
-	max_agents:      int            = 10_000
-	birth_pool_size: int            = 2048
-	cast_to_f16:     bool           = False
+	size:          		tuple[int,int] = (512,512)
+	max_agents:      	int            = 10_000
+	birth_pool_size:	int            = 2048
+	cast_to_f16:    	bool           = False
+	# ---
+	wall_density:	float = 1e-3
+	deadly_walls:	bool  = True 
 	# --- food
 	n_food_types:         	int   = 1
 	growth_rate:  			float = 1e-2
@@ -300,6 +303,10 @@ def simulate(cfg: Config):
 
 	#-------------------------------------------------------------------
 
+	key_wrld, key_sim, key_init, key_aux = jr.split(jr.key(cfg.seed), 4)
+
+	#-------------------------------------------------------------------
+
 	dummy_model, agent_init, agent_apply = make_agents_model(cfg)
 	dummy_prms = eqx.filter(dummy_model, eqx.is_array)
 	prms_shaper = ex.ParameterReshaper(dummy_prms)
@@ -404,6 +411,11 @@ def simulate(cfg: Config):
 		# ---
 		chemical_types=chemical_types,
 		food_types=food_types,
+		# ---
+		walls_density=cfg.wall_density,
+		deadly_walls=cfg.deadly_walls,
+		# ---
+		key=key_wrld
 	)
 
 	#-------------------------------------------------------------------
@@ -582,8 +594,6 @@ def simulate(cfg: Config):
 
 
 	#-------------------------------------------------------------------
-
-	key_sim, key_init, key_aux = jr.split(jr.key(cfg.seed), 3)
 
 	state = world.reset(key_init)
 
