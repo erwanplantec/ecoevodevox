@@ -485,7 +485,6 @@ class GridWorld:
 		"""
 		agents = state.agents
 		actions = jnp.where(agents.alive[:,None], actions, jnp.zeros(2, dtype=jnp.int16))
-		no_move = jnp.all(actions == 0, axis=-1)
 
 		# # --- 1. Predation ---
 
@@ -566,8 +565,11 @@ class GridWorld:
 		p_grow = self.growth_conv(food); assert isinstance(p_grow, jax.Array)
 		p_grow = jnp.where(jnp.any(food, axis=0, keepdims=True), 0.0, p_grow)
 		grow = jr.bernoulli(key, p_grow)
+
+		i, j = state.agents.position.T
+		agents_grid = jnp.zeros(self.size, dtype=bool).at[i,j].set(state.agents.alive)
 		grow = jnp.where(
-			jnp.cumsum(grow.astype(jnp.uint4),axis=0)>1 | self.walls[None],
+			jnp.cumsum(grow.astype(jnp.uint4),axis=0)>1 | self.walls[None] | agents_grid[None],
 			False,
 			grow
 		)
