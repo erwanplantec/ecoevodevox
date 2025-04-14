@@ -564,7 +564,7 @@ class GridWorld:
 		p_grow = jnp.where(jnp.any(food, axis=0, keepdims=True), 0.0, p_grow)
 		grow = jr.bernoulli(key, p_grow)
 		grow = jnp.where(
-			jnp.cumsum(grow.astype(jnp.uint4),axis=0)>1,
+			jnp.cumsum(grow.astype(jnp.uint4),axis=0)>1 | self.walls[None],
 			False,
 			grow
 		)
@@ -592,6 +592,8 @@ class GridWorld:
 		img = jnp.ones((F,H,W,4)) * food_colors[:,None,None]
 		img = jnp.clip(jnp.where(food[...,None], img, 0.).sum(0), 0.0, 1.0) #type:ignore
 		img = img.at[:,:,-1].set(jnp.any(food, axis=0))
+
+		img = jnp.where(self.walls[...,None], jnp.array([0.5, 0.5, 0.5, 1.0]), img)
 
 		ai, aj = agents.position[agents.alive].T
 		img = img.at[ai,aj].set(jnp.array([0.,0.,0.,1.]))

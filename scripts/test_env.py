@@ -26,18 +26,18 @@ reproduction_cost = 0.1
 base_cost = 0.1
 
 # --- Food ---
-n_food = n_chemicals = 1
-dmin, dmax = 4., 5.
-growth_rate = 0.2 / (dmin**2)
+n_food = n_chemicals = 4
+dmin, dmax = 10., 10.
+growth_rate = 0.1
 
 food_types = FoodType(
-	growth_rate=jnp.array([0.2]*n_food, dtype=jnp.float16),
-	dmin=jnp.array([4.]*n_food),
-	dmax=jnp.array([8.]*n_food),
+	growth_rate=jnp.array([growth_rate]*n_food, dtype=jnp.float16),
+	dmin=jnp.array([dmin]*n_food),
+	dmax=jnp.array([dmax]*n_food),
 	energy_concentration=jnp.array([1.0]*n_food, dtype=jnp.float16),
 	chemical_signature=jnp.identity(n_chemicals, dtype=jnp.float16),
 	spontaneous_grow_prob=jnp.zeros(n_food, dtype=jnp.float16),
-	initial_density=jnp.array([0.001])
+	initial_density=jnp.array([0.001/n_food]*n_food)
 )
 
 chemical_types = ChemicalType(diffusion_rate=jnp.array([1.0]*n_chemicals))
@@ -63,7 +63,8 @@ env = GridWorld(env_size, agent_fctry, agent_init, agent_apply, mutation_fn, che
 	move_energy_cost=move_cost, base_energy_loss=base_cost, 
 	initial_agent_energy=1.0,
 	time_above_threshold_to_reproduce=50, time_below_threshold_to_die=30,
-	passive_reproduction=True, passive_eating=True, predation=False,) 
+	passive_reproduction=True, passive_eating=True, predation=False, key=jr.key(1),
+	walls_density=0.001) 
 
 def step_fn(state, key):
 	state, data = env.step(state, key)
