@@ -451,7 +451,11 @@ class GridWorld:
 			last_agent_id=agents.id_.max(),
 		)
 
-		return state, dict(reproducing=reproducing, dying=dead, avg_dead_age=avg_dead_age)
+		return (
+			state, 
+			dict(reproducing=reproducing, dying=dead, avg_dead_age=avg_dead_age, 
+				 energy_loss=energy_loss)
+		)
 
 	# ---
 
@@ -510,7 +514,11 @@ class GridWorld:
 		agents = agents._replace(position=positions)
 
 		if self.deadly_walls:
-			agents = agents._replace(alive=agents.alive&(~hits_wall))
+			dead_by_wall = agents.alive & hits_wall
+			agents = agents._replace(alive=agents.alive&(~dead_by_wall))
+		else:
+			dead_by_wall = jnp.zeros_like(agents.alive)
+
 
 		# --- 3. Eat ---
 		# Agents can eat if:
@@ -542,7 +550,10 @@ class GridWorld:
 
 		return (
 			state._replace(agents=agents, food=food), 
-			{"energy_intakes":agents_energy_intake}
+			{
+				"energy_intakes":agents_energy_intake,
+				"dead_by_wall": dead_by_wall,
+			}
 		)
 
 	# ====================== FOOD =========================

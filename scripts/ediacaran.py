@@ -87,11 +87,12 @@ class Config(NamedTuple):
 	T_ctrnn: 	float = 0.5
 	dt_ctrnn: 	float = 0.1
 	# --- mutations
-	sigma_mut: 		float = 0.03
-	p_mut: 			float = 1e-3
-	p_duplicate: 	float = 1e-3
-	p_rm: 			float = 1e-3
-	p_add: 			float = 1e-3
+	sigma_mut: 				float = 0.03
+	p_mut: 					float = 1e-3
+	p_duplicate_split: 		float = 1e-3
+	p_duplicate_no_split: 	float = 1e-3
+	p_rm: 					float = 1e-3
+	p_add: 					float = 1e-3
 
 
 def sensory_expression(
@@ -308,7 +309,8 @@ def simulate(cfg: Config):
 
 	if cfg.mdl=="e":
 		mutation_fn = partial(mutate, 
-							  p_duplicate=cfg.p_duplicate, 
+							  p_duplicate_split=cfg.p_duplicate_split, 
+							  p_duplicate_no_split=cfg.p_duplicate_no_split,
 							  p_add=cfg.p_add,
 							  p_rm=cfg.p_rm,
 							  p_mut=cfg.p_mut,
@@ -471,6 +473,7 @@ def simulate(cfg: Config):
 			"population": alive.sum(),
 			"nb_dead": jnp.sum(step_data["dying"]),
 			"avg_dead_age": step_data["avg_dead_age"],
+			"dead_by_wall": step_data["dead_by_wall"],
 			"energy_levels": state.agents.energy,
 			"nb_above_threshold": masked_sum(state.agents.energy>0.0, alive),
 			"nb_below_threshold": masked_sum(state.agents.energy<0.0, alive),
@@ -488,6 +491,7 @@ def simulate(cfg: Config):
 			"nb_moved": masked_sum(have_moved, alive),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"energy_intakes": step_data["energy_intakes"],
+			"energy_loss": step_data["energy_loss"],
 			"avg_energy_intake": masked_mean(step_data["energy_intakes"], alive),
 			# --- OBS
 			"obs_C": observations.chemicals,
@@ -509,7 +513,8 @@ def simulate(cfg: Config):
 		return log_data, {}, 0
 
 	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations", "genotypes", 
-					  "moving", "offsprings", "agents_pos", "actions", "obs_C", "obs_W"]
+					  "moving", "offsprings", "agents_pos", "actions", "obs_C", "obs_W",
+					  "dead_by_wall", "energy_loss"]
 
 	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
 			  				  "nb_inters", "active_types", "expressed_types",

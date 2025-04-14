@@ -391,7 +391,8 @@ prms_sample_max = lambda prms_like: eqx.tree_at(
 
 def mutate(prms: jax.Array,
            key: jax.Array, 
-           p_duplicate: float, 
+           p_duplicate_split: float, 
+           p_duplicate_no_split: float,
            p_mut: float,
            p_rm: float,
            p_add: float,
@@ -401,8 +402,7 @@ def mutate(prms: jax.Array,
            clip_min: jax.Array|None=None, 
            clip_max: jax.Array|None=None,
            sample_min: jax.Array|None=None,
-           sample_max: jax.Array|None=None,
-           split_pop_duplicate: bool=True):
+           sample_max: jax.Array|None=None):
 
     # ---
     prms_shaped = shaper.reshape_single(prms)
@@ -419,8 +419,12 @@ def mutate(prms: jax.Array,
 
     # ---
     
-    def _duplicate(prms, key):
-        prms, _ = duplicate_type(prms, key, split_pop=split_pop_duplicate)
+    def _duplicate_split(prms, key):
+        prms, _ = duplicate_type(prms, key, split_pop=True)
+        return prms
+
+    def _duplicate_no_split(prms, key):
+        prms, _ = duplicate_type(prms, key, split_pop=False)
         return prms
 
     def _rm(prms, key):
@@ -449,10 +453,20 @@ def mutate(prms: jax.Array,
 
     key, k1, k2 = jr.split(key, 3)
 
-    if p_duplicate > 0.0:
+    if p_duplicate_split > 0.0:
         prms_shaped = jax.lax.cond(
-            jr.uniform(k1)<p_duplicate,
-            lambda prms, key: _duplicate(prms, key),
+            jr.uniform(k1)<p_duplicate_split,
+            lambda prms, key: _duplicate_split(prms, key),
+            lambda prms, key: prms,
+            prms_shaped, k2
+        )
+
+    key, k1, k2 = jr.split(key, 3)
+
+    if p_duplicate_no_split > 0.0:
+        prms_shaped = jax.lax.cond(
+            jr.uniform(k1)<p_duplicate_no_split,
+            lambda prms, key: _duplicate_no_split(prms, key),
             lambda prms, key: prms,
             prms_shaped, k2
         )
