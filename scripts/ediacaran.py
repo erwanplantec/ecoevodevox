@@ -26,11 +26,11 @@ from src.devo.utils import make_apply_init
 
 
 class Config(NamedTuple):
-	seed: int=0
-	debug: bool=False
+	seed: 	int=0
+	debug: 	bool=False
 	# --- log
-	wandb_log: bool=True
-	wandb_project: str="eedx"
+	wandb_log: 		bool=True
+	wandb_project: 	str="eedx"
 	log_table_freq: int=1_000
 	# --- world
 	size:          		tuple[int,int] = (512,512)
@@ -54,7 +54,6 @@ class Config(NamedTuple):
 	max_energy: 						float = 20.0
 	base_energy_loss: 					float = 0.1
 	reproduction_cost: 					float = 0.5
-	move_cost: 							float = 0.1
 	applied_force_energy_cost: 			float = 0.0
 	s_expression_energy_cost: 			float = 0.0
 	m_expression_energy_cost: 			float = 0.0
@@ -68,11 +67,9 @@ class Config(NamedTuple):
 	sensor_expression_threshold: 	float = 0.03
 	border_threshold: 				float = 0.9
 	# --- motor interface
-	move_force_threshold: 		float = 0.1 #minimum amount of force
 	motor_expression_threshold: float = 0.03
 	force_threshold_to_move: 	float = 0.1
 	neurons_max_motor_force: 	float = 0.1
-	neurons_force_gain: 		float = 0.1
 	passive_eating: 			bool  = True
 	passive_reproduction: 		bool  = True
 	# --- dev model
@@ -162,7 +159,6 @@ def gridworld_motor_interface(
 	expression_threshold:float=0.03,
 	m_activation: Callable=lambda m: jnp.clip(m, 0.0, 1.0),
 	threshold_to_move: float=0.1,
-	neurons_force_gain: float=1.0,
 	neurons_max_force: float=0.1,
 	pos_dtype: type=jnp.int16):
 	# ---
@@ -175,26 +171,24 @@ def gridworld_motor_interface(
 	# ---
 	xs = xs * jnn.one_hot(jnp.argmax(jnp.abs(xs), axis=-1), 2)
 
-	on_top = xs[:,1] > border_threshold
+	on_top = xs[:,1] 	> border_threshold
 	on_bottom = xs[:,1] < - border_threshold
-	on_right = xs[:,0] > border_threshold
-	on_left = xs[:,0] < - border_threshold
+	on_right = xs[:,0] 	> border_threshold
+	on_left = xs[:,0] 	< - border_threshold
 
-	forces = jnp.clip(v*m*neurons_force_gain, 0.0, neurons_max_force)
-	N_force = jnp.where(on_bottom, forces, 0.0).sum()   #type:ignore
-	S_force = jnp.where(on_top, forces, 0.0).sum()      #type:ignore
-	E_force = jnp.where(on_left, forces, 0.0).sum()     #type:ignore
-	W_force = jnp.where(on_right, forces, 0.0).sum()    #type:ignore
+	forces = jnp.clip(v*m, 0.0, neurons_max_force) #forces applied by all neurons (N,)
+	N_force = jnp.where(on_bottom, 	forces, 0.0).sum() 	#type:ignore
+	S_force = jnp.where(on_top, 	forces, 0.0).sum()	#type:ignore
+	E_force = jnp.where(on_left, 	forces, 0.0).sum() 	#type:ignore
+	W_force = jnp.where(on_right, 	forces, 0.0).sum() 	#type:ignore
 
-	NSEW_forces = jnp.array([N_force, S_force, E_force, W_force])
-	NSEW_directions = jnp.array([[1,0],[-1,0],[0,1],[0,-1]], dtype=pos_dtype)
+	directional_forces = jnp.array([N_force, S_force, E_force, W_force]) # 4,
+	directions = jnp.array([[1,0],[-1,0],[0,1],[0,-1]], dtype=pos_dtype)
 	
-	net_force = jnp.sum(NSEW_forces[:,None] * NSEW_directions, axis=0) #2,
-	largest_component_idx = jnp.argmax(jnp.abs(net_force))
-	largest_component = net_force[largest_component_idx]
-	largest_component_direction = jnp.sign(largest_component).astype(jnp.int16)
-	move = jnp.zeros(2, dtype=jnp.int16).at[largest_component_idx].set(largest_component_direction)
-	move = move * (jnp.abs(largest_component)>threshold_to_move)
+	net_directional_force = jnp.sum(directional_forces[:,None] * directions, axis=0) #2,
+	move = jnp.where(jnp.abs(net_directional_force)>threshold_to_move, #if force on component is above threshold
+					 jnp.sign(net_directional_force), # move on unit
+					 0.0).astype(jnp.int16) # don't move
 	return move
 
 #-------------------------------------------------------------------
@@ -210,7 +204,6 @@ def make_agents_model(cfg: Config):
 		decode_fn=partial(gridworld_motor_interface, 
 						  threshold_to_move=cfg.force_threshold_to_move,
 						  border_threshold=cfg.border_threshold, 
-						  neurons_force_gain=cfg.neurons_force_gain,
 						  neurons_max_force=cfg.neurons_max_motor_force),
 		T=cfg.T_ctrnn, 
 
@@ -352,14 +345,13 @@ def simulate(cfg: Config):
 										   expression_threshold=cfg.motor_expression_threshold)
 			D = jnp.linalg.norm(net.x[:,None]-net.x[None], axis=-1)
 			connection_materials = jnp.abs(net.W) * D
-			total_applied_force = jnp.sum(jnp.clip(net.v*m_expressed*cfg.neurons_force_gain, 0.0, cfg.neurons_max_motor_force))
+			total_applied_force = jnp.sum(jnp.clip(net.v*m_expressed, 0.0, cfg.neurons_max_motor_force))
 
 			total_cost = (nb_neurons 			 		  * cfg.neurons_energy_cost
 						  + jnp.sum(s_expressed) 		  * cfg.s_expression_energy_cost
 						  + jnp.sum(m_expressed) 		  * cfg.m_expression_energy_cost
 						  + total_applied_force  		  * cfg.applied_force_energy_cost
 						  + jnp.sum(connection_materials) * cfg.connection_cost)
-
 
 			return total_cost.astype(jnp.float16)
 
@@ -394,7 +386,6 @@ def simulate(cfg: Config):
 		agent_init=agent_init,
 		init_agents=cfg.initial_agents,
 		# ---
-		move_energy_cost=cfg.move_cost,
 		reproduction_energy_cost=cfg.reproduction_cost,
 		state_energy_cost_fn=state_energy_cost_fn,
 		base_energy_loss=cfg.base_energy_loss,
@@ -500,6 +491,7 @@ def simulate(cfg: Config):
 			"avg_energy_intake": masked_mean(step_data["energy_intakes"], alive),
 			# --- OBS
 			"obs_C": observations.chemicals,
+			"obs_W": observations.walls,
 			# --- NETWORKS
 			**model_metrics,
 			# --- FOOD
@@ -517,7 +509,7 @@ def simulate(cfg: Config):
 		return log_data, {}, 0
 
 	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations", "genotypes", 
-					  "moving", "offsprings", "agents_pos", "actions"]
+					  "moving", "offsprings", "agents_pos", "actions", "obs_C", "obs_W"]
 
 	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
 			  				  "nb_inters", "active_types", "expressed_types",
@@ -563,6 +555,8 @@ def simulate(cfg: Config):
 		del data["food_map"]
 		del data["agents_pos"]
 		del data["actions"]
+		del data["obs_C"]
+		del data["obs_W"]
 
 		return data
 

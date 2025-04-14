@@ -160,7 +160,6 @@ class GridWorld:
 		reproduction_energy_cost: float=0.5,
 		predation_energy_gain: float=5.,
 		predation_energy_cost: float=0.1,
-		move_energy_cost: float=0.1,
 		base_energy_loss: float=0.05,
 		max_energy: float=10.0,
 		state_energy_cost_fn: Callable[[Agent],Float16]=lambda agent: jnp.zeros((), dtype=jnp.float16),
@@ -242,7 +241,6 @@ class GridWorld:
 													   [ 0.1 , 1.0 , 0.1 ],
 													   [ 0.1 , 0.1 , 0.1 ]], dtype=f16)
 		self.chemical_detection_threshold = chemical_detection_threshold
-		self.move_energy_cost = move_energy_cost
 		self.predation_energy_gain = predation_energy_gain
 		self.predation_energy_cost = predation_energy_cost
 		self.state_energy_cost_fn = state_energy_cost_fn
@@ -267,10 +265,10 @@ class GridWorld:
 		observations = self._get_observations(state)
 		
 		actions, policy_states = self.mapped_agent_apply(state.agents.prms, 
-														 observations, 
-														 state.agents.policy_state, 
-														 jr.split(key_action, self.max_agents), 
-														 state.agents.alive)
+											 			 observations, 
+											 			 state.agents.policy_state, 
+											 			 jr.split(key_action, self.max_agents), 
+											 			 state.agents.alive)
 		actions = actions.astype(jnp.int16)
 		state = eqx.tree_at(lambda s: s.agents.policy_state, state, policy_states)
 		state, actions_data = self._apply_actions(state, actions)
@@ -334,8 +332,14 @@ class GridWorld:
 		
 		key_repr, key_mut, key_init = jr.split(key, 3)
 		agents = state.agents
+
+		# --- Update Energy ---
+		state_dependant_energy_loss = jax.vmap(self.state_energy_cost_fn)(agents)
+		energy_loss = self.base_energy_loss + state_dependant_energy_loss
+		agents_energy = jnp.where(agents.alive, agents.energy-energy_loss, 0.0)
+		agents = agents._replace(energy=agents_energy)
 		
-		below_threshold = agents.energy < 0.
+		below_threshold = agents.energy < 0.0
 		above_threshold = agents.energy > self.energy_reproduction_threshold
 		
 		agents_tat = jnp.where(above_threshold&agents.alive, agents.time_above_threshold+1, 0); assert isinstance(agents_tat, jax.Array)
@@ -504,11 +508,7 @@ class GridWorld:
 		
 		# --- update energy
 		positions = jnp.where(hits_wall[:,None], agents.position, new_positions)
-		state_dependant__energy_loss = jax.vmap(self.state_energy_cost_fn)(agents)
-		basal_energy_loss = self.base_energy_loss + state_dependant__energy_loss
-		energy_loss = jnp.where(no_move, basal_energy_loss, basal_energy_loss+self.move_energy_cost)
-		agents_energy = jnp.where(agents.alive, agents.energy-energy_loss, 0.0)
-		agents = agents._replace(position=positions, energy=agents_energy)
+		agents = agents._replace(position=positions)
 
 		if self.deadly_walls:
 			agents = agents._replace(alive=agents.alive&(~hits_wall))
@@ -541,7 +541,10 @@ class GridWorld:
 		reproduce = reproduce & (agents.time_above_threshold > self.time_above_threshold_to_reproduce)
 		agents = agents._replace(reproduce=reproduce)
 
-		return state._replace(agents=agents, food=food), {"energy_intakes":agents_energy_intake, "energy_loss": energy_loss}
+		return (
+			state._replace(agents=agents, food=food), 
+			{"energy_intakes":agents_energy_intake}
+		)
 
 	# ====================== FOOD =========================
 
@@ -618,6 +621,4 @@ class GridWorld:
 #=======================================================================
 #								INTERFACE
 #=======================================================================
-
-
 
