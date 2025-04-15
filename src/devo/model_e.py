@@ -166,7 +166,7 @@ class Model_E(CTRNNPolicy):
         
         self.types = types
         if connection_model=="xoxt":
-            self.connection_model = XOXT(n_synaptic_markers, k1)
+            self.connection_model = XOXT(n_synaptic_markers, key=k1)
         elif connection_model=="mlp":
             self.connection_model = MLPConn(n_synaptic_markers, k1)
         else:
