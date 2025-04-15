@@ -92,10 +92,12 @@ def migration_step(xs, t, psis, gammas, zetas, mask, thetas, dt=0.01, temperatur
 
 class XOXT(eqx.Module):
     O: jax.Array
-    def __init__(self, dims, key):
+    bound: float|None
+    def __init__(self, dims, bound=-10.0, *, key: jax.Array):
         self.O = jnp.zeros((dims,dims))
+        self.bound=bound
     def __call__(self, x_pre, x_post):
-        return x_pre @ self.O @ x_post
+        return jnn.tanh(x_pre @ self.O @ x_post)*self.bound
 
 class MLPConn(nn.MLP):
     def __init__(self, dims, key):

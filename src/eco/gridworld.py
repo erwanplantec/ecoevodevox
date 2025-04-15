@@ -441,7 +441,7 @@ class GridWorld:
 			return agents
 		# ---	
 
-		reproducing = agents.reproduce # N,
+		reproducing = agents.reproduce & agents.alive # N,
 
 		# ===
 		agents = jax.lax.cond(
