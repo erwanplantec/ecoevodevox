@@ -460,19 +460,12 @@ def simulate(cfg: Config):
 			expressed_types = jnp.sum(jnp.round(prms.types.pi * prms.types.active * cfg.N_gain) > 0.0, axis=-1)
 			model_metrics = {
 				"network_sizes": jnp.where(alive, networks.mask.sum(-1), 0),
-				"avg_network_size": masked_mean(networks.mask.sum(-1), alive),
 				"nb_sensors": nb_sensors,
-				"avg_nb_sensors": masked_mean(nb_sensors, alive),
 				"nb_motors": nb_motors,
-				"avg_nb_motors": masked_mean(nb_motors, alive),
 				"nb_inters": nb_inters,
-				"avg_nb_inters": masked_mean(nb_inters, alive),
 				"nb_sensorimotors": nb_sensorimotors,
-				"avg_nb_sensorimotors": masked_mean(nb_sensorimotors, alive),
 				"active_types": active_types,
-				"avg_active_types": masked_mean(active_types, alive),
 				"expressed_types": expressed_types,
-				"avg_expressed_types": masked_mean(expressed_types, alive),
 				"types_vector": types_vector
 			}
 		else:
@@ -483,16 +476,10 @@ def simulate(cfg: Config):
 			"alive": alive,
 			"population": alive.sum(),
 			"nb_dead": jnp.sum(step_data["dying"]),
-			"nb_dead_by_wall": jnp.sum(step_data["dead_by_wall"]),
 			"avg_dead_age": step_data["avg_dead_age"],
 			"energy_levels": state.agents.energy,
-			"nb_above_threshold": masked_sum(state.agents.energy>0.0, alive),
-			"nb_below_threshold": masked_sum(state.agents.energy<0.0, alive),
-			"avg_energy_levels": masked_mean(state.agents.energy, alive),
 			"ages": state.agents.age,
-			"avg_age": masked_mean(state.agents.age, alive),
 			"generations": state.agents.generation,
-			"avg_generation": masked_mean(state.agents.generation, alive),
 			"genotypes": state.agents.prms.astype(jnp.float16),
 			"offsprings": state.agents.n_offsprings,
 			"avg_offsprings": masked_mean(state.agents.n_offsprings, alive), 
@@ -500,12 +487,8 @@ def simulate(cfg: Config):
 			# --- ACTIONS
 			"actions": actions,
 			"moving": have_moved,
-			"nb_moved": masked_sum(have_moved, alive),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"energy_intakes": step_data["energy_intakes"],
-			"avg_energy_intake": masked_mean(step_data["energy_intakes"], alive),
-			**{f"avg_{key}": masked_mean(step_data[key], alive) 
-			   for key in step_data.keys() if key.startswith("energy_loss")},
 			**{key: step_data[key] for key in step_data.keys() if key.startswith("energy_loss")},
 			# --- OBS
 			"obs_C": observations.chemicals,
@@ -543,6 +526,11 @@ def simulate(cfg: Config):
 				arr = np.where(np.isnan(arr)|np.isinf(arr), 0.0, arr)
 				data[field] = arr
 				table_fields.append(field)
+				
+				if arr.ndim==1:
+					data[f"{field} (avg)"] = np.mean(arr)
+					data[f"{field} (max)"] = np.max(arr)
+					data[f"{field} (min)"] = np.min(arr)
 
 		log_step = wandb.run._step
 
