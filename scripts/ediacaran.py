@@ -540,7 +540,7 @@ def simulate(cfg: Config):
 		for field in fields:
 			if data[field].shape and data[field].shape[0]==alive.shape[0]:
 				arr = data[field][alive]
-				arr = jnp.where(jnp.isnan(arr)|jnp.isinf(arr), 0.0, arr)
+				arr = np.where(jnp.isnan(arr)|jnp.isinf(arr), 0.0, arr)
 				data[field] = arr
 				table_fields.append(field)
 
