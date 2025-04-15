@@ -184,7 +184,7 @@ def gridworld_motor_interface(
 	W_force = jnp.where(on_right, 	forces, 0.0).sum() 	#type:ignore
 
 	directional_forces = jnp.array([N_force, S_force, E_force, W_force]) # 4,
-	directions = jnp.array([[1,0],[-1,0],[0,1],[0,-1]], dtype=pos_dtype)
+	directions = jnp.array([[-1,0],[1,0],[0,1],[0,-1]], dtype=pos_dtype)
 	
 	net_directional_force = jnp.sum(directional_forces[:,None] * directions, axis=0) #2,
 	move = jnp.where(jnp.abs(net_directional_force)>threshold_to_move, #if force on component is above threshold
@@ -538,7 +538,9 @@ def simulate(cfg: Config):
 		fields = list(data.keys())
 		for field in fields:
 			if data[field].shape and data[field].shape[0]==alive.shape[0]:
-				data[field] = data[field][alive]
+				arr = data[field]
+				mask = alive & (~np.isinf(arr)) & (~np.isnan(arr))
+				data[field] = arr[mask]
 				table_fields.append(field)
 
 		log_step = wandb.run._step

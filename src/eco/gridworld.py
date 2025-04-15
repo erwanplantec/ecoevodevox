@@ -102,10 +102,14 @@ class Agent(NamedTuple):
 	reward: Float16
 	reproduce: Bool
 	# --- infos
-	n_offsprings: UInt16
-	generation: UInt32
-	id_: UInt32
-	parent_id_: UInt32
+	n_offsprings: UInt16=0
+	generation: UInt32=0
+	id_: UInt32=0
+	parent_id_: UInt32=0
+	move_up_count: UInt16=0
+	move_down_count: UInt16=0
+	move_right_count: UInt16=0
+	move_left_count: UInt16=0
 	# ---
 
 class ChemicalType(NamedTuple):
@@ -489,7 +493,16 @@ class GridWorld:
 		"""
 		agents = state.agents
 		actions = jnp.where(agents.alive[:,None], actions, jnp.zeros(2, dtype=jnp.int16))
+		
+		move_left  = actions[:,1] < 0
+		move_right = actions[:,1] > 0
+		move_up    = actions[:,0] < 0
+		move_down  = actions[:,0] > 0
 
+		agents = agents._replace(move_up_count	  = agents.move_up_count    + move_up,
+								 move_down_count  = agents.move_down_count  + move_down,
+								 move_right_count = agents.move_right_count + move_right,
+								 move_left_count  = agents.move_left_count  + move_left)
 		# # --- 1. Predation ---
 
 		# if self.predation:
