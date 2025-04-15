@@ -327,7 +327,11 @@ class GridWorld:
 			n_offsprings 		 = jnp.zeros(self.max_agents, dtype=ui16),
 			id_ 				 = jnp.where(alive, jnp.cumsum(alive, dtype=ui32), 0),
 			parent_id_ 			 = jnp.zeros(self.max_agents, dtype=ui32),
-			generation 			 = jnp.zeros(self.max_agents, dtype=ui16)
+			generation 			 = jnp.zeros(self.max_agents, dtype=ui16),
+			move_up_count  		 = jnp.zeros(self.max_agents, dtype=ui16),
+			move_down_count		 = jnp.zeros(self.max_agents, dtype=ui16),
+			move_left_count      = jnp.zeros(self.max_agents, dtype=ui16),
+			move_right_count     = jnp.zeros(self.max_agents, dtype=ui16)
 		)
 
 	# ---
@@ -415,7 +419,7 @@ class GridWorld:
 			parents_generation = agents.generation[parents_buffer_id]
 			agents_generation = agents.generation.at[childs_buffer_id].set(parents_generation+1)
 
-			agents = Agent(
+			agents = agents._replace(
 				prms 				 = agents_prms,
 				policy_state 		 = agents_policy_states,
 				# ---
@@ -439,10 +443,11 @@ class GridWorld:
 
 		reproducing = agents.reproduce # N,
 
+		# ===
 		agents = jax.lax.cond(
 			jnp.any(reproducing)&jnp.any(~agents.alive),
 			_reproduce, 
-			lambda _, agents: agents, 
+			lambda repr, agts: agts, 
 			reproducing, agents
 		)
 
@@ -499,10 +504,10 @@ class GridWorld:
 		move_up    = actions[:,0] < 0
 		move_down  = actions[:,0] > 0
 
-		agents = agents._replace(move_up_count	  = agents.move_up_count    + move_up,
-								 move_down_count  = agents.move_down_count  + move_down,
-								 move_right_count = agents.move_right_count + move_right,
-								 move_left_count  = agents.move_left_count  + move_left)
+		agents = agents._replace(move_up_count	  = jnp.where(move_up, agents.move_up_count+1, agents.move_up_count),
+								 move_down_count  = jnp.where(move_down, agents.move_down_count+1, agents.move_down_count),
+								 move_right_count = jnp.where(move_right, agents.move_right_count+1, agents.move_right_count),
+								 move_left_count  = jnp.where(move_left, agents.move_left_count+1, agents.move_left_count))
 		# # --- 1. Predation ---
 
 		# if self.predation:

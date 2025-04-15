@@ -652,7 +652,7 @@ if __name__ == '__main__':
 	warnings.filterwarnings('error', category=FutureWarning)
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
-		birth_pool_size=16, max_neurons=64, wandb_log=True, energy_concentration=100.,
+		birth_pool_size=16, max_neurons=64, wandb_log=False, energy_concentration=100.,
 		initial_food_density=1.0, mdl="e", cast_to_f16=True, debug=True)
 	state, tools = simulate(cfg)
 	world = tools["world"]
