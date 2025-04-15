@@ -539,7 +539,10 @@ def simulate(cfg: Config):
 		for field in fields:
 			if data[field].shape and data[field].shape[0]==alive.shape[0]:
 				arr = data[field]
-				mask = alive & (~np.isinf(arr)) & (~np.isnan(arr))
+				mask = (alive 
+					& (~np.any(np.isnan(arr), axis=tuple(range(1,arr.ndim))))
+					& (~np.any(np.isinf(arr), axis=tuple(range(1,arr.ndim))))
+				)
 				data[field] = arr[mask]
 				table_fields.append(field)
 
@@ -652,7 +655,7 @@ if __name__ == '__main__':
 	warnings.filterwarnings('error', category=FutureWarning)
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
-		birth_pool_size=16, max_neurons=64, wandb_log=False, energy_concentration=100.,
+		birth_pool_size=16, max_neurons=64, wandb_log=True, energy_concentration=100.,
 		initial_food_density=1.0, mdl="e", cast_to_f16=True, debug=True)
 	state, tools = simulate(cfg)
 	world = tools["world"]
