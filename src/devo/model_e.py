@@ -1,6 +1,6 @@
 from jax.flatten_util import ravel_pytree
 from ..eco.gridworld import Observation
-from .ctrnn import CTRNN, CTRNNPolicy, CTRNNPolicyConfig
+from .policy_network.ctrnn import CTRNN, CTRNNPolicy, CTRNNPolicyConfig
 
 import jax
 import jax.numpy as jnp

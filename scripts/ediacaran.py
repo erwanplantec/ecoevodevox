@@ -13,7 +13,7 @@ import wandb
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.devo.ctrnn import CTRNN
+from src.devo.policy_network.ctrnn import CTRNN
 from src.eco.gridworld import (Agent, GridWorld,
 							   EnvState,
 							   FoodType,
@@ -355,13 +355,18 @@ def simulate(cfg: Config):
 						  + total_applied_force  		  * cfg.applied_force_energy_cost
 						  + jnp.sum(connection_materials) * cfg.connection_cost)
 
-			return total_cost.astype(jnp.float16)
+			return (
+				total_cost.astype(jnp.float16), 
+				{"energy_loss: neurons": nb_neurons, "energy_loss: s_expressed": jnp.sum(s_expressed), 
+				 "energy_loss: m_expressed": jnp.sum(m_expressed), "energy_loss: applied_force": total_applied_force,
+				 "energy_loss: connection_materials": jnp.sum(connection_materials)}
+			)
 
 		state_energy_cost_fn = _state_energy_cost_fn
 
 	else:
 
-		state_energy_cost_fn = lambda state: jnp.zeros((), jnp.float16)
+		state_energy_cost_fn = lambda state: (jnp.zeros((), jnp.float16), {})
 
 	#-------------------------------------------------------------------
 
@@ -436,6 +441,11 @@ def simulate(cfg: Config):
 		actions = step_data["actions"]
 		alive = state.agents.alive
 		have_moved = ~jnp.all(actions == jnp.zeros(2, dtype=actions.dtype)[None], axis=-1)
+		reproduction_rates = jnp.where(
+			alive,
+			state.agents.n_offsprings / state.agents.age,
+			0.0
+		)
 		# ---
 		observations = step_data["observations"]
 		# ---
@@ -472,8 +482,9 @@ def simulate(cfg: Config):
 			"alive": alive,
 			"population": alive.sum(),
 			"nb_dead": jnp.sum(step_data["dying"]),
+			"nb_dead_by_wall": jnp.sum(step_data["dead_by_wall"]),
 			"avg_dead_age": step_data["avg_dead_age"],
-			"dead_by_wall": step_data["dead_by_wall"],
+			"nb_dead_by_wall": step_data["dead_by_wall"],
 			"energy_levels": state.agents.energy,
 			"nb_above_threshold": masked_sum(state.agents.energy>0.0, alive),
 			"nb_below_threshold": masked_sum(state.agents.energy<0.0, alive),
@@ -485,14 +496,17 @@ def simulate(cfg: Config):
 			"genotypes": state.agents.prms.astype(jnp.float16),
 			"offsprings": state.agents.n_offsprings,
 			"avg_offsprings": masked_mean(state.agents.n_offsprings, alive), 
+			"reproduction_rates": reproduction_rates,
 			# --- ACTIONS
 			"actions": actions,
 			"moving": have_moved,
 			"nb_moved": masked_sum(have_moved, alive),
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"energy_intakes": step_data["energy_intakes"],
-			"energy_loss": step_data["energy_loss"],
 			"avg_energy_intake": masked_mean(step_data["energy_intakes"], alive),
+			**{f"avg_{key}": masked_mean(step_data[key], alive) 
+			   for key in step_data.keys() if key.startswith("energy_loss")},
+			**{key: step_data[key] for key in step_data.keys() if key.startswith("energy_loss")},
 			# --- OBS
 			"obs_C": observations.chemicals,
 			"obs_W": observations.walls,
@@ -505,26 +519,11 @@ def simulate(cfg: Config):
 			# --- render
 			"food_map": state.food,
 			"agents_pos": state.agents.position
-
 		}
 
 		log_data = jax.tree.map(lambda x: jnp.where(jnp.isnan(x), jnp.zeros_like(x), x), log_data)
 
 		return log_data, {}, 0
-
-	fields_to_mask = ["energy_levels", "ages", "energy_intakes", "generations", "genotypes", 
-					  "moving", "offsprings", "agents_pos", "actions", "obs_C", "obs_W",
-					  "dead_by_wall", "energy_loss"]
-
-	model_e_fields_to_mask = ["nb_sensorimotors", "nb_motors", "nb_sensors",
-			  				  "nb_inters", "active_types", "expressed_types",
-			  				  "network_sizes", "types_vector"]
-
-	all_fields_to_mask = fields_to_mask
-
-	if cfg.mdl=="e":
-		all_fields_to_mask.extend(model_e_fields_to_mask)
-
 
 
 	def host_log_transform(data):
@@ -535,13 +534,17 @@ def simulate(cfg: Config):
 
 		alive = data["alive"]
 
-		for field in all_fields_to_mask:
-			data[field] = data[field][alive]
+		table_fields = []
+		fields = list(data.keys())
+		for field in fields:
+			if data[field].shape and data[field].shape[0]==alive.shape[0]:
+				data[field] = data[field][alive]
+				table_fields.append(field)
 
-		table_fields = all_fields_to_mask
 		log_step = wandb.run._step
 
 		if not log_step % cfg.log_table_freq:
+
 			n_rows = data[table_fields[0]].shape[0]
 			table_columns = [data[field] for field in table_fields]
 			table_data = [
@@ -647,7 +650,7 @@ if __name__ == '__main__':
 	warnings.filterwarnings('error', category=FutureWarning)
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
-		birth_pool_size=16, max_neurons=64, wandb_log=False, energy_concentration=100.,
+		birth_pool_size=16, max_neurons=64, wandb_log=True, energy_concentration=100.,
 		initial_food_density=1.0, mdl="e", cast_to_f16=True, debug=True)
 	state, tools = simulate(cfg)
 	world = tools["world"]

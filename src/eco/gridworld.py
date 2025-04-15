@@ -162,7 +162,7 @@ class GridWorld:
 		predation_energy_cost: float=0.1,
 		base_energy_loss: float=0.05,
 		max_energy: float=10.0,
-		state_energy_cost_fn: Callable[[Agent],Float16]=lambda agent: jnp.zeros((), dtype=jnp.float16),
+		state_energy_cost_fn: Callable[[Agent],Tuple[Float16,dict]]=lambda _: (jnp.zeros((), dtype=jnp.float16), dict()),
 		# ---
 		time_above_threshold_to_reproduce: int=20,
 		time_below_threshold_to_die: int=10,
@@ -334,7 +334,7 @@ class GridWorld:
 		agents = state.agents
 
 		# --- Update Energy ---
-		state_dependant_energy_loss = jax.vmap(self.state_energy_cost_fn)(agents)
+		state_dependant_energy_loss, energy_loss_info = jax.vmap(self.state_energy_cost_fn)(agents)
 		energy_loss = self.base_energy_loss + state_dependant_energy_loss
 		agents_energy = jnp.where(agents.alive, agents.energy-energy_loss, 0.0)
 		agents = agents._replace(energy=agents_energy)
@@ -454,7 +454,7 @@ class GridWorld:
 		return (
 			state, 
 			dict(reproducing=reproducing, dying=dead, avg_dead_age=avg_dead_age, 
-				 energy_loss=energy_loss)
+				 energy_loss=energy_loss, **energy_loss_info)
 		)
 
 	# ---
