@@ -525,6 +525,7 @@ def simulate(cfg: Config):
 
 		return log_data, {}, 0
 
+	#-------------------------------------------------------------------
 
 	def host_log_transform(data):
 		# ---
@@ -538,12 +539,9 @@ def simulate(cfg: Config):
 		fields = list(data.keys())
 		for field in fields:
 			if data[field].shape and data[field].shape[0]==alive.shape[0]:
-				arr = data[field]
-				mask = (alive 
-					& (~np.any(np.isnan(arr), axis=tuple(range(1,arr.ndim))))
-					& (~np.any(np.isinf(arr), axis=tuple(range(1,arr.ndim))))
-				)
-				data[field] = arr[mask]
+				arr = data[field][alive]
+				arr = jnp.where(jnp.isnan(arr)|jnp.isinf(arr), 0.0, arr)
+				data[field] = arr
 				table_fields.append(field)
 
 		log_step = wandb.run._step
