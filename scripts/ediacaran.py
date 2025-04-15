@@ -335,7 +335,7 @@ def simulate(cfg: Config):
 	if cfg.mdl=="e":
 
 		def _state_energy_cost_fn(state: Agent):
-			""""""
+			"""computes state energy cost"""
 			net: CTRNN = state.policy_state
 			# ---
 			assert net.mask is not None
@@ -346,7 +346,8 @@ def simulate(cfg: Config):
 										   border_threshold=cfg.border_threshold, 
 										   expression_threshold=cfg.motor_expression_threshold)
 			D = jnp.linalg.norm(net.x[:,None]-net.x[None], axis=-1)
-			connection_materials = jnp.abs(net.W) * D
+			W = jnp.where(net.mask[None]&net.mask[:,None], net.W, 0.0)
+			connection_materials = jnp.abs(W) * D
 			total_applied_force = jnp.sum(jnp.clip(net.v*m_expressed, 0.0, cfg.neurons_max_motor_force))
 
 			total_cost = (nb_neurons 			 		  * cfg.neurons_energy_cost
@@ -484,7 +485,6 @@ def simulate(cfg: Config):
 			"nb_dead": jnp.sum(step_data["dying"]),
 			"nb_dead_by_wall": jnp.sum(step_data["dead_by_wall"]),
 			"avg_dead_age": step_data["avg_dead_age"],
-			"nb_dead_by_wall": step_data["dead_by_wall"],
 			"energy_levels": state.agents.energy,
 			"nb_above_threshold": masked_sum(state.agents.energy>0.0, alive),
 			"nb_below_threshold": masked_sum(state.agents.energy<0.0, alive),
