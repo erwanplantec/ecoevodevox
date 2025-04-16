@@ -51,7 +51,7 @@ class Config(NamedTuple):
 	diffusion_rate:        	float = 20.0
 	# --- agents
 	initial_agents: 					int   = 256
-	body_scale: 						float = 1.0
+	body_scale: 						float = 1.1
 	max_energy: 						float = 20.0
 	base_energy_loss: 					float = 0.1
 	reproduction_cost: 					float = 0.5
@@ -64,7 +64,6 @@ class Config(NamedTuple):
 	time_above_threshold_to_reproduce: 	int   = 50
 	max_age: 							int   = 200
 	# --- sensor interface
-	fov: 							int   = 1
 	sensor_expression_threshold: 	float = 0.03
 	border_threshold: 				float = 0.9
 	# --- motor interface
@@ -113,7 +112,6 @@ def sensory_expression(
 def gridworld_sensory_interface(
 	obs: Observation, 
 	ctrnn: CTRNN, 
-	fov: int=1,
 	sensor_activation: Callable=jnn.tanh,
 	expression_threshold: float=0.03,
 	border_threshold: float=0.9):
@@ -125,14 +123,16 @@ def gridworld_sensory_interface(
 	# ---
 	C = obs.chemicals # mC,W,W
 	W = obs.walls
-	mC, *_ = C.shape
+	mC, D, _ = C.shape
 
-	xs = xs * (1/(2*border_threshold)) #correct such that rounding threshold is at border threshold
-	coords = fov+jnp.round(xs.at[:,1].multiply(-1.) * fov).astype(jnp.int16)
+	on_border = jnp.any(jnp.abs(xs)>border_threshold, axis=-1) #check if neuron is on border (epithelial layer)
+	_xs = (xs.at[:,1].multiply(-1)+1)/2.0001 #make sure it does not reach upper bound
+	coords = jnp.floor(_xs * D)
+	coords = coords.astype(jnp.int16)
 	j, i = coords.T
 
-	Ic = jnp.sum(C[:,i,j].T * s[:,:mC], axis=1) # chemical input #type:ignore
-	Iw = jnp.sum(W[:,i,j].T * s[:,mC:mC+1], axis=1) # walls input #type:ignore
+	Ic = jnp.where(on_border, jnp.sum(C[:,i,j].T * s[:,:mC], axis=1), 0.0) # chemical input #type:ignore
+	Iw = jnp.where(on_border, jnp.sum(W[:,i,j].T * s[:,mC:mC+1], axis=1), 0.0) # walls input #type:ignore
 	Ii = jnp.sum(s[:, mC+1:] * obs.internal, axis=1) # internal input #type:ignore
 
 	I = Ic + Iw + Ii
@@ -202,7 +202,6 @@ def make_agents_model(cfg: Config):
 	"""
 	interface = CTRNNPolicyConfig(
 		encode_fn=partial(gridworld_sensory_interface, 
-						  fov=cfg.fov, 
 						  border_threshold=cfg.border_threshold,
 						  expression_threshold=cfg.sensor_expression_threshold),
 		decode_fn=partial(gridworld_motor_interface, 
@@ -405,7 +404,6 @@ def simulate(cfg: Config):
 		time_above_threshold_to_reproduce=cfg.time_above_threshold_to_reproduce,
 		predation=False,
 		passive_eating=cfg.passive_eating,
-		passive_reproduction=cfg.passive_reproduction,
 		max_energy=cfg.max_energy,
 		max_age=cfg.max_age,
 		# ---
@@ -651,7 +649,7 @@ if __name__ == '__main__':
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
 		birth_pool_size=16, max_neurons=64, wandb_log=False, energy_concentration=100.,
-		initial_food_density=1.0, mdl="e", cast_to_f16=True, debug=True)
+		initial_food_density=1.0, mdl="e", cast_to_f16=True, debug=True, body_scale=10)
 	state, tools = simulate(cfg)
 	world = tools["world"]
 	plt.show()

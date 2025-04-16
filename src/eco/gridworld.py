@@ -157,12 +157,11 @@ class GridWorld:
 		max_agents: int=1_024, 
 		init_agents: int=256,
 		passive_eating: bool=True,
-		passive_reproduction: bool=True,
 		predation: bool=False,
 		max_age: int=1_000,
-		field_of_view: int=1,
 		agents_scale: float=1.,
 		birth_pool_size: int|None=None,
+		max_action_norm: float=5.0,
 		# ---
 		walls_density: float=0.0,
 		# ---
@@ -200,13 +199,26 @@ class GridWorld:
 		self.chemicals_diffusion_conv = make_chemical_diffusion_convolution(self.size,
 																			chemical_types.diffusion_rate)
 
-		deltas = jnp.mgrid[-field_of_view:field_of_view+1, -field_of_view:field_of_view+1]*agents_scale
+		body_sz = agents_scale
+		resolution = int(jnp.ceil(body_sz+1))
+		deltas = jnp.stack(
+			[jnp.linspace(-body_sz/2, body_sz/2.0001, resolution)[:,None].repeat(resolution, 1),
+			 jnp.linspace(-body_sz/2, body_sz/2.0001, resolution)[None,:].repeat(resolution, 0)]
+		)
+		@jax.jit
+		def _get_body_cells_indices(pos: jax.Array):
+			indices = get_cell_index(pos[:,None,None]+deltas)
+			indices =jnp.mod(indices, jnp.array(size,dtype=i16)[:,None,None])
+			return indices # 2, S, S
+
+		self.get_body_cells_indices = _get_body_cells_indices
+
 		@jax.jit
 		def _vision_fn(x: jax.Array, pos: jax.Array):
 			"""Return window of array corresponding to agent view if agent at pos"""
-			indices = get_cell_index(pos[:,None,None]+deltas)
-			indices = jnp.mod(indices, jnp.array(size,dtype=i16)[:,None,None])
+			indices = _get_body_cells_indices(pos)
 			return x[:, *indices] if x.ndim==3 else x[*indices]
+
 		self.vision_fn = _vision_fn
 
 		self.mutation_fn = mutation_fn
@@ -237,12 +249,11 @@ class GridWorld:
 				default_output=dummy_output)
 
 		self.max_agents = max_agents
+		self.max_action_norm = max_action_norm
 		self.init_agents = init_agents
 		self.birth_pool_size = birth_pool_size if birth_pool_size is not None else max_agents
 		self.predation = predation
-		self.field_of_view = field_of_view
 		self.passive_eating = passive_eating
-		self.passive_reproduction = passive_reproduction
 		self.energy_reproduction_threshold = energy_reproduction_threshold
 		self.time_above_threshold_to_reproduce = time_above_threshold_to_reproduce
 		self.time_below_threshold_to_die = time_below_threshold_to_die
@@ -258,12 +269,6 @@ class GridWorld:
 		self.predation_energy_cost = predation_energy_cost
 		self.state_energy_cost_fn = state_energy_cost_fn
 		self.max_age = max_age
-
-	# ---
-
-	@property
-	def n_actions(self):
-		return 5 + int(not self.passive_eating) + int(not self.passive_reproduction) + int(self.predation)
 
 	# ---
 
@@ -461,9 +466,8 @@ class GridWorld:
 			return agents
 		# ---	
 
-		reproducing = agents.reproduce & agents.alive # N,
+		reproducing = agents.alive & (agents.time_above_threshold > self.time_above_threshold_to_reproduce)
 
-		# ===
 		agents = jax.lax.cond(
 			jnp.any(reproducing)&jnp.any(~agents.alive),
 			_reproduce, 
@@ -518,6 +522,7 @@ class GridWorld:
 		"""
 		agents = state.agents
 		actions = jnp.where(agents.alive[:,None], actions, jnp.zeros(2, dtype=f16))
+		actions = jnp.clip(actions, -self.max_action_norm, self.max_action_norm)
 		
 		move_left  = actions[:,1] < 0
 		move_right = actions[:,1] > 0
@@ -545,7 +550,7 @@ class GridWorld:
 		# --- 2. Move ---
 
 		new_positions = jnp.mod(agents.position+actions, jnp.array(self.size, dtype=i16)[None])
-		hits_wall = self.walls[*get_cell_index(new_positions).T].astype(bool) #type:ignore
+		hits_wall = jax.vmap(lambda p: jnp.any(self.walls[*self.get_body_cells_indices(p)]))(new_positions)
 		
 		# --- update energy
 		positions = jnp.where(hits_wall[:,None], agents.position, new_positions)
@@ -577,14 +582,6 @@ class GridWorld:
 		agents = agents._replace(energy=agents_energy)
 		food = jnp.where(eating_agents_grid[None]>0, False, food)
 
-		# --- 4. Reproduce ---
-		# agents reproduce if :
-		# 	reproduce action is taken if passive reproduction is false
-		#	Their energy level has been above threshold for enough time
-		# ---
-		reproduce = agents.alive & (actions==6) if not self.passive_reproduction else agents.alive
-		reproduce = reproduce & (agents.time_above_threshold > self.time_above_threshold_to_reproduce)
-		agents = agents._replace(reproduce=reproduce)
 
 		return (
 			state._replace(agents=agents, food=food), 
