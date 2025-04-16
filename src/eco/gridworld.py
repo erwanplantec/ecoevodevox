@@ -31,6 +31,11 @@ type AgentState = PyTree
 type AgentParams = jax.Array
 type Action = jax.Array
 
+@jax.jit
+def get_cell_index(pos: Float16):
+	indices = jnp.floor(pos).astype(jnp.int16)
+	return indices
+
 def make_growth_convolution(env_size: tuple[int,int],
 							reproduction_rates: jax.Array,
 							dmins: jax.Array,
@@ -94,7 +99,7 @@ class Agent(NamedTuple):
 	# ---
 	alive: Bool
 	age: Int16
-	position: Int16
+	position: Float16
 	energy: Float16
 	time_above_threshold: Int16
 	time_below_threshold: Int16
@@ -102,14 +107,14 @@ class Agent(NamedTuple):
 	reward: Float16
 	reproduce: Bool
 	# --- infos
-	n_offsprings: UInt16=0
-	generation: UInt32=0
-	id_: UInt32=0
-	parent_id_: UInt32=0
-	move_up_count: UInt16=0
-	move_down_count: UInt16=0
-	move_right_count: UInt16=0
-	move_left_count: UInt16=0
+	n_offsprings: UInt16
+	generation: UInt32
+	id_: UInt32
+	parent_id_: UInt32
+	move_up_count: UInt16
+	move_down_count: UInt16
+	move_right_count: UInt16
+	move_left_count: UInt16
 	# ---
 
 class ChemicalType(NamedTuple):
@@ -156,6 +161,7 @@ class GridWorld:
 		predation: bool=False,
 		max_age: int=1_000,
 		field_of_view: int=1,
+		agents_scale: float=1.,
 		birth_pool_size: int|None=None,
 		# ---
 		walls_density: float=0.0,
@@ -179,6 +185,7 @@ class GridWorld:
 		key: jax.Array):
 		
 		self.size = size
+		self.agents_scale = agents_scale
 		self.walls = jr.bernoulli(key, walls_density, self.size)
 		self.deadly_walls = deadly_walls
 
@@ -193,11 +200,13 @@ class GridWorld:
 		self.chemicals_diffusion_conv = make_chemical_diffusion_convolution(self.size,
 																			chemical_types.diffusion_rate)
 
-		deltas = jnp.mgrid[-field_of_view:field_of_view+1, -field_of_view:field_of_view+1]
+		deltas = jnp.mgrid[-field_of_view:field_of_view+1, -field_of_view:field_of_view+1]*agents_scale
 		@jax.jit
 		def _vision_fn(x: jax.Array, pos: jax.Array):
-			indices = jnp.mod(pos[:,None,None]+deltas, jnp.array(self.size, dtype=i16)[:,None,None])
-			return x[:, *indices]
+			"""Return window of array corresponding to agent view if agent at pos"""
+			indices = get_cell_index(pos[:,None,None]+deltas)
+			indices = jnp.mod(indices, jnp.array(size,dtype=i16)[:,None,None])
+			return x[:, *indices] if x.ndim==3 else x[*indices]
 		self.vision_fn = _vision_fn
 
 		self.mutation_fn = mutation_fn
@@ -303,11 +312,11 @@ class GridWorld:
 
 	def _init_agents(self, key):
 
-		key_prms, key_pos, key_init, key_age = jr.split(key, 4)
+		key_prms, key_pos, key_init = jr.split(key, 3)
 		alive = jnp.arange(self.max_agents) < self.init_agents
 		prms = jax.vmap(self.agent_fctry)(jr.split(key_prms,self.max_agents))
 		policy_states = self.mapped_agent_init(prms, jr.split(key_init, alive.shape[0]), alive)
-		positions = jr.randint(key_pos, (self.max_agents, 2), minval=1, maxval=jnp.array(self.size, dtype=i16)-1, dtype=i16)
+		positions = jr.uniform(key_pos, (self.max_agents, 2), minval=1.0, maxval=jnp.array(self.size, dtype=f16)-1, dtype=f16)
 
 		return Agent(
 			# ---
@@ -366,11 +375,13 @@ class GridWorld:
 
 		# ---
 
-		def _reproduce(reproducing: jax.Array, agents: Agent)->Agent:
+		def _reproduce(reproducing: jax.Array, agents: Agent, key: jax.Array)->Agent:
 			"""
 			"""
+			key_samp, key_pos = jr.split(key)
+
 			free_buffer_spots = ~agents.alive # N,
-			_, parents_buffer_id = jax.lax.top_k(reproducing+jr.uniform(key_repr,reproducing.shape,minval=-0.1,maxval=0.1), self.birth_pool_size)
+			_, parents_buffer_id = jax.lax.top_k(reproducing+jr.uniform(key_samp,reproducing.shape,minval=-0.1,maxval=0.1), self.birth_pool_size) # add random noise to have non deterministic sammpling
 			parents_mask = reproducing[parents_buffer_id]
 			parents_prms = agents.prms[parents_buffer_id]
 			is_free, childs_buffer_id = jax.lax.top_k(free_buffer_spots, self.birth_pool_size)
@@ -382,7 +393,7 @@ class GridWorld:
 			childs_prms = jax.vmap(self.mutation_fn)(parents_prms, jr.split(key_mut, self.birth_pool_size))
 			childs_policy_states = self.mapped_agent_init(childs_prms, jr.split(key_init, self.birth_pool_size), childs_mask)
 			childs_energy = jnp.full(self.birth_pool_size, self.initial_agent_energy, dtype=f16)
-			childs_positions = agents.position[parents_buffer_id]
+			childs_positions = agents.position[parents_buffer_id] + jr.uniform(key_pos, minval=-1.0, maxval=1.0, dtype=f16)
 
 			agents_alive = agents.alive.at[childs_buffer_id].set(childs_alive) #make sur to not overwrite occupied buffer ids (if more reproducers than free buffer spots)
 			
@@ -419,7 +430,12 @@ class GridWorld:
 			parents_generation = agents.generation[parents_buffer_id]
 			agents_generation = agents.generation.at[childs_buffer_id].set(parents_generation+1)
 
-			agents = agents._replace(
+			agents_move_up_count = agents.move_up_count.at[childs_buffer_id].set(0)
+			agents_move_down_count = agents.move_down_count.at[childs_buffer_id].set(0)
+			agents_move_right_count = agents.move_right_count.at[childs_buffer_id].set(0)
+			agents_move_left_count = agents.move_left_count.at[childs_buffer_id].set(0)
+
+			agents = Agent(
 				prms 				 = agents_prms,
 				policy_state 		 = agents_policy_states,
 				# ---
@@ -436,7 +452,11 @@ class GridWorld:
 				id_ 				 = agents_id,
 				parent_id_ 			 = agents_parent_ids,
 				generation 			 = agents_generation,
-				n_offsprings 		 = agents_n_offsprings
+				n_offsprings 		 = agents_n_offsprings,
+				move_up_count		 = agents_move_up_count,
+				move_down_count 	 = agents_move_down_count,
+				move_right_count 	 = agents_move_right_count,
+				move_left_count 	 = agents_move_left_count
 			)
 			return agents
 		# ---	
@@ -447,8 +467,8 @@ class GridWorld:
 		agents = jax.lax.cond(
 			jnp.any(reproducing)&jnp.any(~agents.alive),
 			_reproduce, 
-			lambda repr, agts: agts, 
-			reproducing, agents
+			lambda repr, agts, key: agts, 
+			reproducing, agents, key_repr
 		)
 
 		agents = agents._replace(
@@ -476,7 +496,7 @@ class GridWorld:
 		chemical_fields = self.chemicals_diffusion_conv(chemical_fields)
 
 		agents = state.agents
-		agents_i, agents_j = agents.position.T
+		agents_i, agents_j = get_cell_index(agents.position).T
 		agents_alive_grid = jnp.zeros(self.size).at[agents_i, agents_j].add(agents.alive)
 		agents_scent_field = jsp.signal.convolve(agents_alive_grid, self.agent_scent_diffusion_kernel, method="fft", mode="same")
 		
@@ -497,7 +517,7 @@ class GridWorld:
 		"""
 		"""
 		agents = state.agents
-		actions = jnp.where(agents.alive[:,None], actions, jnp.zeros(2, dtype=jnp.int16))
+		actions = jnp.where(agents.alive[:,None], actions, jnp.zeros(2, dtype=f16))
 		
 		move_left  = actions[:,1] < 0
 		move_right = actions[:,1] > 0
@@ -525,7 +545,7 @@ class GridWorld:
 		# --- 2. Move ---
 
 		new_positions = jnp.mod(agents.position+actions, jnp.array(self.size, dtype=i16)[None])
-		hits_wall = self.walls[*new_positions.T].astype(bool) #type:ignore
+		hits_wall = self.walls[*get_cell_index(new_positions).T].astype(bool) #type:ignore
 		
 		# --- update energy
 		positions = jnp.where(hits_wall[:,None], agents.position, new_positions)
@@ -546,7 +566,7 @@ class GridWorld:
 		eating_agents = (actions==5)&(agents.alive) if not self.passive_eating else agents.alive
 		
 		food = state.food
-		agents_i, agents_j = agents.position.T
+		agents_i, agents_j = get_cell_index(agents.position).T
 		eating_agents_grid = jnp.zeros(self.size, dtype=ui8).at[agents_i,agents_j].add(eating_agents.astype(jnp.uint8)) #nb of eating agents in each cell
 		energy_grid = jnp.sum(food*self.food_types.energy_concentration[:,None,None], axis=0) #total qty of energy in each cell
 		energy_intake_per_agent = jnp.where(eating_agents_grid>0, energy_grid/eating_agents_grid, 0.0)
@@ -570,7 +590,7 @@ class GridWorld:
 			state._replace(agents=agents, food=food), 
 			{
 				"energy_intakes":agents_energy_intake,
-				"dead_by_wall": dead_by_wall,
+				"dead_by_wall": dead_by_wall
 			}
 		)
 
@@ -595,7 +615,7 @@ class GridWorld:
 		p_grow = jnp.where(jnp.any(food, axis=0, keepdims=True), 0.0, p_grow)
 		grow = jr.bernoulli(key, p_grow)
 
-		i, j = state.agents.position.T
+		i, j = get_cell_index(state.agents.position).T
 		agents_grid = jnp.zeros(self.size, dtype=bool).at[i,j].set(state.agents.alive)
 		grow = jnp.where(
 			jnp.cumsum(grow.astype(jnp.uint4),axis=0)>1 | self.walls[None] | agents_grid[None],
@@ -630,8 +650,7 @@ class GridWorld:
 		img = jnp.where(self.walls[...,None], jnp.array([0.5, 0.5, 0.5, 1.0]), img)
 
 		ai, aj = agents.position[agents.alive].T
-		img = img.at[ai,aj].set(jnp.array([0.,0.,0.,1.]))
-
+		ax.scatter(aj,ai, marker="s", color="k")
 		ax.imshow(img)
 
 	# ---
@@ -649,7 +668,6 @@ class GridWorld:
 		return cam
 
 
-#=======================================================================
-#								INTERFACE
-#=======================================================================
+if __name__ == '__main__':
+	pass
 

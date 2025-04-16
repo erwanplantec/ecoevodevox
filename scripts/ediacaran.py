@@ -51,6 +51,7 @@ class Config(NamedTuple):
 	diffusion_rate:        	float = 20.0
 	# --- agents
 	initial_agents: 					int   = 256
+	body_scale: 						float = 1.0
 	max_energy: 						float = 20.0
 	base_energy_loss: 					float = 0.1
 	reproduction_cost: 					float = 0.5
@@ -70,6 +71,7 @@ class Config(NamedTuple):
 	motor_expression_threshold: float = 0.03
 	force_threshold_to_move: 	float = 0.1
 	neurons_max_motor_force: 	float = 0.1
+	max_total_motor_force:		float = 5.0
 	passive_eating: 			bool  = True
 	passive_reproduction: 		bool  = True
 	# --- dev model
@@ -125,7 +127,7 @@ def gridworld_sensory_interface(
 	W = obs.walls
 	mC, *_ = C.shape
 
-	xs = xs * (1/(2*border_threshold)) #correct suche that rounding threshold is at border threshold
+	xs = xs * (1/(2*border_threshold)) #correct such that rounding threshold is at border threshold
 	coords = fov+jnp.round(xs.at[:,1].multiply(-1.) * fov).astype(jnp.int16)
 	j, i = coords.T
 
@@ -161,6 +163,7 @@ def gridworld_motor_interface(
 	m_activation: Callable=lambda m: jnp.clip(m, 0.0, 1.0),
 	threshold_to_move: float=0.1,
 	neurons_max_force: float=0.1,
+	max_total_force: float=5.0,
 	pos_dtype: type=jnp.int16):
 	# ---
 	assert ctrnn.m is not None
@@ -188,8 +191,8 @@ def gridworld_motor_interface(
 	
 	net_directional_force = jnp.sum(directional_forces[:,None] * directions, axis=0) #2,
 	move = jnp.where(jnp.abs(net_directional_force)>threshold_to_move, #if force on component is above threshold
-					 jnp.sign(net_directional_force), # move on unit
-					 0.0).astype(jnp.int16) # don't move
+					 jnp.clip(net_directional_force, -max_total_force, max_total_force), # move on unit
+					 0.0).astype(jnp.float16) # don't move
 	return move
 
 #-------------------------------------------------------------------
@@ -394,6 +397,7 @@ def simulate(cfg: Config):
 		agent_init=agent_init,
 		init_agents=cfg.initial_agents,
 		# ---
+		agents_scale=cfg.body_scale,
 		reproduction_energy_cost=cfg.reproduction_cost,
 		state_energy_cost_fn=state_energy_cost_fn,
 		base_energy_loss=cfg.base_energy_loss,
@@ -486,7 +490,12 @@ def simulate(cfg: Config):
 			"reproduction_rates": reproduction_rates,
 			# --- ACTIONS
 			"actions": actions,
+			"actions_norm": jnp.linalg.norm(actions, axis=-1),
 			"moving": have_moved,
+			"move_up_count": state.agents.move_up_count,
+			"move_down_count": state.agents.move_down_count,
+			"move_right_count": state.agents.move_right_count,
+			"move_left_count": state.agents.move_right_count,
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"energy_intakes": step_data["energy_intakes"],
 			**{key: step_data[key] for key in step_data.keys() if key.startswith("energy_loss")},
@@ -523,7 +532,7 @@ def simulate(cfg: Config):
 		for field in fields:
 			if data[field].shape and data[field].shape[0]==alive.shape[0]:
 				arr = data[field][alive]
-				arr = np.where(np.isnan(arr)|np.isinf(arr), 0.0, arr)
+				#arr = np.where(np.isnan(arr)|np.isinf(arr), 0.0, arr)
 				data[field] = arr
 				table_fields.append(field)
 				
@@ -641,7 +650,7 @@ if __name__ == '__main__':
 	warnings.filterwarnings('error', category=FutureWarning)
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
-		birth_pool_size=16, max_neurons=64, wandb_log=True, energy_concentration=100.,
+		birth_pool_size=16, max_neurons=64, wandb_log=False, energy_concentration=100.,
 		initial_food_density=1.0, mdl="e", cast_to_f16=True, debug=True)
 	state, tools = simulate(cfg)
 	world = tools["world"]
