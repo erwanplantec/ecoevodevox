@@ -568,20 +568,26 @@ class GridWorld:
 		# 	always if self.passive_eating is True
 		#	eating action (5) is taken
 
-		eating_agents = (actions==5)&(agents.alive) if not self.passive_eating else agents.alive
-		
 		food = state.food
-		agents_i, agents_j = get_cell_index(agents.position).T
-		eating_agents_grid = jnp.zeros(self.size, dtype=ui8).at[agents_i,agents_j].add(eating_agents.astype(jnp.uint8)) #nb of eating agents in each cell
+		eating_agents = agents.alive
+		body_cells = jax.vmap(self.get_body_cells_indices)(agents.position) #N,2,S,S
+		*_, S = body_cells.shape
+		eating_agents_expanded = jnp.tile(eating_agents[:,None,None], (1,S,S))
+
+		eating_agents_grid = (jnp.zeros(self.size, dtype=jnp.uint8)
+							  .at[*body_cells.transpose(1,0,2,3).reshape(2,-1)]
+							  .add(eating_agents_expanded.reshape(-1)))
 		energy_grid = jnp.sum(food*self.food_types.energy_concentration[:,None,None], axis=0) #total qty of energy in each cell
-		energy_intake_per_agent = jnp.where(eating_agents_grid>0, energy_grid/eating_agents_grid, 0.0)
-		agents_energy_intake = jnp.where(agents.alive, energy_intake_per_agent[agents_i, agents_j], 0.0)
+		energy_per_agent_grid = jnp.where(eating_agents_grid>0, energy_grid/eating_agents_grid, 0.0) #H,W
+
+		agents_energy_intake = jax.vmap(
+			lambda cs: jnp.sum(energy_per_agent_grid[*cs]) 
+		)(body_cells)
 
 		agents_energy = jnp.clip(agents.energy + agents_energy_intake, -jnp.inf, self.max_energy)
 
 		agents = agents._replace(energy=agents_energy)
 		food = jnp.where(eating_agents_grid[None]>0, False, food)
-
 
 		return (
 			state._replace(agents=agents, food=food), 

@@ -493,7 +493,7 @@ def simulate(cfg: Config):
 			"move_up_count": state.agents.move_up_count,
 			"move_down_count": state.agents.move_down_count,
 			"move_right_count": state.agents.move_right_count,
-			"move_left_count": state.agents.move_right_count,
+			"move_left_count": state.agents.move_left_count,
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"energy_intakes": step_data["energy_intakes"],
 			**{key: step_data[key] for key in step_data.keys() if key.startswith("energy_loss")},
