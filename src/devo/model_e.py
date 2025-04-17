@@ -1,6 +1,7 @@
+from chex import ArrayTree
 from jax.flatten_util import ravel_pytree
-from ..eco.gridworld import Observation
-from .policy_network.ctrnn import CTRNN, CTRNNPolicy, CTRNNPolicyConfig
+from .base import BaseDevelopmentalModel
+from .policy_network.ctrnn import SECTRNN
 
 import jax
 import jax.numpy as jnp
@@ -10,7 +11,8 @@ import equinox as eqx
 import equinox.nn as nn
 import evosax as ex
 
-from typing import Callable, NamedTuple
+from typing import Any, Callable
+from flax.struct import PyTreeNode
 from jaxtyping import (
     PyTree,
     Bool,
@@ -18,8 +20,14 @@ from jaxtyping import (
     Int8, Int16, Int32,
     UInt8, UInt16, UInt32)
 
+class TypeBasedSECTRNN(SECTRNN):
+    """Type Based Spatially Embedded CTRNN"""
+    s: jax.Array
+    m: jax.Array
+    id_: jax.Array
 
-class NeuronType(NamedTuple):
+
+class NeuronType(PyTreeNode):
     # ---
     pi:     Float32|Float16
     active: Bool
@@ -107,10 +115,8 @@ class MLPConn(nn.MLP):
 
 # ======================================================
 
-
-dummy_policy_config = CTRNNPolicyConfig(lambda x:x, lambda x:x)
     
-class Model_E(CTRNNPolicy):
+class Model_E(BaseDevelopmentalModel):
     # --- params ---
     types: NeuronType
     connection_model: PyTree
@@ -135,14 +141,11 @@ class Model_E(CTRNNPolicy):
         dvpt_time: float=10., 
         temperature_decay: float=1., 
         extra_migration_fields: int=3,
-        N_gain: float=10.0, 
-        policy_cfg: CTRNNPolicyConfig=dummy_policy_config, 
+        N_gain: float=10.0,  
         body_shape: str="square", 
         connection_model: str="xoxt", 
         *,
         key: jax.Array):
-
-        super().__init__(policy_cfg)
         
         k1, k2 = jr.split(key)
 
@@ -182,7 +185,7 @@ class Model_E(CTRNNPolicy):
         self.N_gain = N_gain
         self.body_shape = body_shape
     # ---
-    def initialize(self, key: jax.Array)->CTRNN:
+    def __call__(self, key: jax.Array)->TypeBasedSECTRNN:
         
         # 1. Initialize neurons
         x0 = jr.normal(key, (self.max_nodes, 2)) * 0.1
@@ -219,7 +222,7 @@ class Model_E(CTRNNPolicy):
         W = jax.vmap(jax.vmap(self.connection_model, in_axes=(0,None)), in_axes=(None,0))(g,g)
         W = W * (node_types.active[:,None] * node_types.active[None])
         
-        network = CTRNN(
+        network = TypeBasedSECTRNN(
             v    = jnp.zeros(xs.shape[0]), 
             x    = xs, 
             W    = W, 
@@ -332,7 +335,7 @@ def add_random_type(model, key):
     k = jr.choice(key, jnp.arange(active.shape[0]), p=inactive/inactive.sum())
     active = active.at[k].set(True)
     order = jnp.argsort(active, descending=True)
-    types = model.types._replace(active=active)
+    types = model.types.replace(active=active)
     types = jax.tree.map(lambda x: x[order], types)
     return eqx.tree_at(lambda mdl: mdl.types, model, types)
 
@@ -341,9 +344,10 @@ def remove_type(model, key):
     k = jr.choice(key, jnp.arange(active.shape[0]), p=active/active.sum())
     active = active.at[k].set(False)
     order = jnp.argsort(active, descending=True)
-    types = model.types._replace(active=active)
+    types = model.types.replace(active=active)
     types = jax.tree.map(lambda x: x[order], types)
     return eqx.tree_at(lambda t: t.types, model, types)
+
 
 min_prms = lambda prms_like: eqx.tree_at(
     lambda tree: [
@@ -351,11 +355,11 @@ min_prms = lambda prms_like: eqx.tree_at(
         tree.types.pi,
         tree.types.gamma
     ],
-    jax.tree.map(lambda x: jnp.full_like(x, -jnp.inf), prms_like),
+    jax.tree.map(lambda x: -jnp.inf, prms_like),
     [
-        jnp.zeros_like(prms_like.types.theta),
-        jnp.zeros_like(prms_like.types.pi),
-        jnp.full_like(prms_like.types.gamma, 1e-8)
+        0.0,
+        0.0,
+        1e-4
     ]
 )
 
@@ -367,8 +371,8 @@ max_prms = lambda prms_like: eqx.tree_at(
 
 mask_prms = lambda prms_like: eqx.tree_at(
     lambda tree: tree.types.active,
-    jax.tree_map(lambda x: jnp.ones_like(x, dtype=bool), prms_like),
-    jnp.zeros_like(prms_like.types.active, dtype=bool)
+    jax.tree.map(lambda x: True, prms_like),
+    False
 )
 
 prms_sample_min = lambda prms_like: eqx.tree_at(
@@ -377,47 +381,42 @@ prms_sample_min = lambda prms_like: eqx.tree_at(
         tree.types.pi,
         tree.types.gamma
     ],
-    jax.tree.map(lambda x: jnp.full_like(x, -1.0), prms_like),
+    jax.tree.map(lambda x: -1.0, prms_like),
     [
-        jnp.zeros_like(prms_like.types.theta),
-        jnp.zeros_like(prms_like.types.pi),
-        jnp.full_like(prms_like.types.gamma, 1e-8)
+        0.0,
+        0.0,
+        1e-4
     ]
 )
 
 prms_sample_max = lambda prms_like: eqx.tree_at(
     lambda x: x.types.theta,
-    jax.tree.map(lambda x:jnp.full_like(x, 1.0), prms_like),
-    jnp.ones_like(prms_like.types.theta)
+    jax.tree.map(lambda x:1.0, prms_like),
+    0.0
 )
 
-def mutate(prms: jax.Array,
-           key: jax.Array, 
-           p_duplicate_split: float, 
-           p_duplicate_no_split: float,
-           p_mut: float,
-           p_rm: float,
-           p_add: float,
-           sigma_mut: float, 
-           shaper: ex.ParameterReshaper, 
-           mutation_mask: jax.Array|None=None, 
-           clip_min: jax.Array|None=None, 
-           clip_max: jax.Array|None=None,
-           sample_min: jax.Array|None=None,
-           sample_max: jax.Array|None=None):
+def make_mutation_fn(prms_like: PyTree,
+                     p_duplicate_split: float, 
+                     p_duplicate_no_split: float,
+                     p_mut: float,
+                     p_rm: float,
+                     p_add: float,
+                     sigma_mut: float, 
+                     prms_are_shaped: bool=True):
 
+    flat_prms_like, shaper = ravel_pytree(prms_like)
     # ---
-    prms_shaped = shaper.reshape_single(prms)
-    if clip_min is None:
-        clip_min, _ = ravel_pytree(min_prms(prms_shaped))
-    if clip_max is None:
-        clip_max, _ = ravel_pytree(max_prms(prms_shaped))
-    if mutation_mask is None:
-        mutation_mask, _ = ravel_pytree(mask_prms(prms_shaped))
-    if sample_min is None:
-        sample_min, _ = ravel_pytree(prms_sample_min(prms_shaped))
-    if sample_max is None:
-        sample_max, _ = ravel_pytree(prms_sample_max(prms_shaped))
+    clip_min = min_prms(prms_like)
+    clip_max = max_prms(prms_like)
+    mutation_mask = mask_prms(prms_like)
+    sample_min, _ = ravel_pytree(jax.tree.map(
+        lambda x, v: jnp.full_like(x, v),
+        prms_like, prms_sample_min(prms_like)
+    ))
+    sample_max, _ = ravel_pytree(jax.tree.map(
+        lambda x, v: jnp.full_like(x, v),
+        prms_like, prms_sample_max(prms_like)
+    ))
 
     # ---
     
@@ -437,76 +436,91 @@ def mutate(prms: jax.Array,
         
     def _point_mut(prms, key):
         k1, k2 = jr.split(key)
-        muts = jr.uniform(k1, prms.shape, minval=sample_min, maxval=sample_max)
-        locs = jnp.where(mutation_mask, jr.bernoulli(k2, p=p_mut, shape=prms.shape), False)
-        mut_prms = jnp.where(locs, muts, prms)
+        muts = jr.uniform(k1, flat_prms_like.shape, minval=sample_min, maxval=sample_max)
+        locs = jr.bernoulli(k2, p=p_mut, shape=muts.shape).astype(float)
+        muts = shaper(muts)
+        locs = shaper(locs)
+        mut_prms = jax.tree.map(
+            lambda x, _x, m: jnp.where(m.astype(bool), _x, x),
+            prms, muts, locs
+        )
         return mut_prms
 
-    def _mutate(prms, key):
+    def _mutate(prms, key)->jax.Array:
         # small perturb
-        epsilon = jr.normal(key, prms.shape) * sigma_mut
-        prms = jnp.where(
-            mutation_mask, 
-            jnp.clip(prms+epsilon, clip_min, clip_max), 
-            prms
+        epsilon = jr.normal(key, flat_prms_like.shape) * sigma_mut
+        epsilon = shaper(epsilon)
+        prms = jax.tree.map(
+            lambda x, eps, m, cmin, cmax: jnp.clip(x+eps,cmin,cmax) if m else x,  
+            prms, epsilon, mutation_mask, clip_min, clip_max    
         )
         return prms
 
+    #-------------------------------------------------------------------
 
-    key, k1, k2 = jr.split(key, 3)
 
-    if p_duplicate_split > 0.0:
-        prms_shaped = jax.lax.cond(
-            jr.uniform(k1)<p_duplicate_split,
-            lambda prms, key: _duplicate_split(prms, key),
-            lambda prms, key: prms,
-            prms_shaped, k2
-        )
+    def _mutation_fn(prms: PyTree, key: jax.Array)->PyTree:
 
-    key, k1, k2 = jr.split(key, 3)
+        prms = shaper(prms) if not prms_are_shaped else prms
 
-    if p_duplicate_no_split > 0.0:
-        prms_shaped = jax.lax.cond(
-            jr.uniform(k1)<p_duplicate_no_split,
-            lambda prms, key: _duplicate_no_split(prms, key),
-            lambda prms, key: prms,
-            prms_shaped, k2
-        )
+        key, k1, k2 = jr.split(key, 3)
 
-    key, k1, k2 = jr.split(key, 3)
+        if p_duplicate_split > 0.0:
+            prms = jax.lax.cond(
+                jr.uniform(k1)<p_duplicate_split,
+                lambda prms, key: _duplicate_split(prms, key),
+                lambda prms, key: prms,
+                prms, k2
+            )
 
-    if p_rm > 0.0:
-        prms_shaped = jax.lax.cond(
-            jr.uniform(k1)<p_rm,
-            lambda prms, key: _rm(prms, key),
-            lambda prms, key: prms,
-            prms_shaped, k2
-        )
+        key, k1, k2 = jr.split(key, 3)
 
-    key, k1, k2 = jr.split(key, 3)
+        if p_duplicate_no_split > 0.0:
+            prms = jax.lax.cond(
+                jr.uniform(k1)<p_duplicate_no_split,
+                lambda prms, key: _duplicate_no_split(prms, key),
+                lambda prms, key: prms,
+                prms, k2
+            )
 
-    if p_add > 0.0:
-        prms_shaped = jax.lax.cond(
-            jr.uniform(k1)<p_add,
-            lambda prms, key: _add(prms, key),
-            lambda prms, key: prms,
-            prms_shaped, k2
-        )
+        key, k1, k2 = jr.split(key, 3)
 
-    prms = shaper.flatten_single(prms_shaped) #type:ignore
+        if p_rm > 0.0:
+            prms = jax.lax.cond(
+                jr.uniform(k1)<p_rm,
+                lambda prms, key: _rm(prms, key),
+                lambda prms, key: prms,
+                prms, k2
+            )
 
-    k1, k2 = jr.split(key)
-    if p_mut > 0.0:
-        prms = _point_mut(prms, k1) #type:ignore
-    if sigma_mut > 0.0:
-        prms = _mutate(prms, k2)
-    
-    return prms
+        key, k1, k2 = jr.split(key, 3)
+
+        if p_add > 0.0:
+            prms = jax.lax.cond(
+                jr.uniform(k1)<p_add,
+                lambda prms, key: _add(prms, key),
+                lambda prms, key: prms,
+                prms, k2
+            )
+
+        k1, k2 = jr.split(key)
+        if p_mut > 0.0:
+            prms = _point_mut(prms, k1) #type:ignore
+        if sigma_mut > 0.0:
+            prms = _mutate(prms, k2)
+        
+        return prms
+
+    #-------------------------------------------------------------------
+
+    return _mutation_fn
 
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
     mdl = Model_E(8, 2, key=jr.key(1))
-    ctrnn = mdl.initialize(jr.key(1))
-    print(ctrnn.mask)
+    prms = eqx.filter(mdl, eqx.is_array)
+    mutation_fn = make_mutation_fn(prms, 0.001, .001, .001, .001, 0.01, True)
+    prms = mutation_fn(prms, jr.key(1))
+    
 

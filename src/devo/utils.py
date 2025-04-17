@@ -4,7 +4,7 @@ import jax.nn as jnn
 import equinox as eqx
 from jax.flatten_util import ravel_pytree
 
-def make_apply_init(model, apply_method: str="__call__", init_method: str="initialize"):
+def make_apply_init(model, apply_method: str="__call__", init_method: str="initialize", reshape_prms: bool=True):
 	"""Create init and apply functions from equinox style model 
 	(corresponding methods are model.initialize and mode.__call__)"""
 	if hasattr(model, "partition"):
@@ -15,13 +15,13 @@ def make_apply_init(model, apply_method: str="__call__", init_method: str="initi
 	_, shaper = ravel_pytree(prms) #type:ignore
 
 	def apply_fn(prms, *args, **kwargs):
-		prms = shaper(prms)
+		if reshape_prms: prms = shaper(prms)
 		mdl = eqx.combine(prms, sttcs)
 		f = getattr(mdl, apply_method)
 		return f(*args, **kwargs)
 
 	def init_fn(prms, *args, **kwargs):
-		prms = shaper(prms)
+		if reshape_prms: prms = shaper(prms)
 		mdl = eqx.combine(prms, sttcs)
 		f = getattr(mdl, init_method)
 		return f(*args, **kwargs)

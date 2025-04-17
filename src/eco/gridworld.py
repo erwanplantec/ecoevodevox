@@ -94,7 +94,7 @@ def make_chemical_diffusion_convolution(env_size: tuple[int,int],
 
 class Agent(NamedTuple):
 	# --- 
-	prms: jax.Array
+	prms: PyTree
 	policy_state: PyTree
 	# ---
 	alive: Bool
@@ -388,7 +388,7 @@ class GridWorld:
 			free_buffer_spots = ~agents.alive # N,
 			_, parents_buffer_id = jax.lax.top_k(reproducing+jr.uniform(key_samp,reproducing.shape,minval=-0.1,maxval=0.1), self.birth_pool_size) # add random noise to have non deterministic sammpling
 			parents_mask = reproducing[parents_buffer_id]
-			parents_prms = agents.prms[parents_buffer_id]
+			parents_prms = jax.tree.map(lambda x: x[parents_buffer_id], agents.prms)
 			is_free, childs_buffer_id = jax.lax.top_k(free_buffer_spots, self.birth_pool_size)
 			childs_mask = parents_mask & is_free #is a child if parent was actually reproducing and there are free buffer spots
 			childs_buffer_id = jnp.where(childs_mask, childs_buffer_id, self.max_agents) # assign wrong index if not born
@@ -402,7 +402,10 @@ class GridWorld:
 
 			agents_alive = agents.alive.at[childs_buffer_id].set(childs_alive) #make sur to not overwrite occupied buffer ids (if more reproducers than free buffer spots)
 			
-			agents_prms = agents.prms.at[childs_buffer_id].set(childs_prms)
+			agents_prms = jax.tree.map(
+				lambda x, x_child: x.at[childs_buffer_id].set(x_child),
+				agents.prms, childs_prms
+			)
 			
 			agents_policy_states = jax.tree.map(lambda x, c: x.at[childs_buffer_id].set(c), agents.policy_state, childs_policy_states)
 			agents_energy = agents.energy.at[childs_buffer_id].set(childs_energy)

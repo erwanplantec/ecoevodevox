@@ -13,15 +13,15 @@ import wandb
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.devo.policy_network.ctrnn import CTRNN
+from src.devo.policy_network.ctrnn import CTRNN, CTRNNPolicy
 from src.eco.gridworld import (Agent, GridWorld,
 							   EnvState,
 							   FoodType,
 							   ChemicalType,
 							   Observation)
-from src.devo.model_e import (Model_E, 
-							  CTRNNPolicyConfig, 
-							  mutate)
+from src.devo.model_e import (Model_E,  
+							  make_mutation_fn,
+							  TypeBasedSECTRNN)
 from src.devo.utils import make_apply_init
 
 
@@ -98,13 +98,9 @@ class Config(NamedTuple):
 
 
 def sensory_expression(
-	ctrnn: CTRNN,
+	ctrnn: TypeBasedSECTRNN,
 	sensor_activation: Callable=jnn.tanh,
 	expression_threshold: float=0.03):
-	# --- 
-	assert ctrnn.s is not None
-	assert ctrnn.mask is not None
-	# ---
 	s = ctrnn.s * ctrnn.mask[:,None]
 	s = jnp.where(jnp.abs(s)>expression_threshold, s, 0.0)
 	s = sensor_activation(s) #neurons,ds
@@ -112,7 +108,7 @@ def sensory_expression(
 
 def gridworld_sensory_interface(
 	obs: Observation, 
-	ctrnn: CTRNN, 
+	ctrnn: TypeBasedSECTRNN, 
 	sensor_activation: Callable=jnn.tanh,
 	expression_threshold: float=0.03,
 	border_threshold: float=0.9):
@@ -140,7 +136,7 @@ def gridworld_sensory_interface(
 	return I
 
 def motor_expression(
-	ctrnn: CTRNN,
+	ctrnn: TypeBasedSECTRNN,
 	border_threshold: float=0.9,
 	expression_threshold:float=0.03,
 	m_activation: Callable=lambda m: jnp.clip(m, 0.0, 1.0)):
@@ -158,7 +154,7 @@ def motor_expression(
 
 
 def gridworld_motor_interface(
-	ctrnn: CTRNN, 
+	ctrnn: TypeBasedSECTRNN, 
 	border_threshold: float=0.9,
 	expression_threshold:float=0.03,
 	m_activation: Callable=lambda m: jnp.clip(m, 0.0, 1.0),
@@ -201,24 +197,20 @@ def gridworld_motor_interface(
 def make_agents_model(cfg: Config):
 	"""
 	"""
-	interface = CTRNNPolicyConfig(
-		encode_fn=partial(gridworld_sensory_interface, 
+	encode_fn=partial(gridworld_sensory_interface, 
 						  border_threshold=cfg.border_threshold,
-						  expression_threshold=cfg.sensor_expression_threshold),
-		decode_fn=partial(gridworld_motor_interface, 
-						  threshold_to_move=cfg.force_threshold_to_move,
-						  border_threshold=cfg.border_threshold, 
-						  neurons_max_force=cfg.neurons_max_motor_force),
-		T=cfg.T_ctrnn, 
-
-		dt=cfg.dt_ctrnn
-	)
+						  expression_threshold=cfg.sensor_expression_threshold)
+	decode_fn=partial(gridworld_motor_interface, 
+					  threshold_to_move=cfg.force_threshold_to_move,
+					  border_threshold=cfg.border_threshold, 
+					  neurons_max_force=cfg.neurons_max_motor_force)
 
 	sensory_dimensions = cfg.n_food_types + 3
 	motor_dimensions = 1 + int(not cfg.passive_eating) + int(not cfg.passive_reproduction)
 
 	if cfg.mdl=="e":
 		def _fctry(key):
+			
 			model = Model_E(n_types=cfg.max_types, 
 						    n_synaptic_markers=cfg.n_synaptic_markers,
 						    max_nodes=cfg.max_neurons,
@@ -229,7 +221,6 @@ def make_agents_model(cfg: Config):
 						    temperature_decay=cfg.temp_decay,
 						    extra_migration_fields=cfg.extra_migration_fields,
 						    N_gain=cfg.N_gain,
-						    policy_cfg=interface,
 						    body_shape="square",
 						    key=key)
 			model = eqx.tree_at(lambda p: [p.types.pi,p.types.s, p.types.m, p.connection_model], 
@@ -241,7 +232,10 @@ def make_agents_model(cfg: Config):
 								 	lambda x: jnp.zeros_like(x) if eqx.is_array(x) else x,
 								 	model.connection_model)
 								])
+			model = CTRNNPolicy(model, encode_fn, decode_fn, cfg.dt_ctrnn, cfg.T_ctrnn)
+			
 			return model
+
 		model_factory = _fctry
 
 	# ---
@@ -267,7 +261,7 @@ def make_agents_model(cfg: Config):
 		raise NameError(f"model {cfg.mdl} is not valid")
 
 	_dummy_model = model_factory(jr.key(0))
-	_agent_apply, _agent_init = make_apply_init(_dummy_model)
+	_agent_apply, _agent_init = make_apply_init(_dummy_model, reshape_prms=False)
 
 	if cfg.cast_to_f16:
 		def _cast_tree(tree: PyTree):
@@ -310,19 +304,25 @@ def simulate(cfg: Config):
 
 	dummy_model, agent_init, agent_apply = make_agents_model(cfg)
 	dummy_prms = eqx.filter(dummy_model, eqx.is_array)
-	prms_shaper = ex.ParameterReshaper(dummy_prms)
+	_, prms_shaper = ravel_pytree(dummy_prms)
 	
 	#-------------------------------------------------------------------
 
 	if cfg.mdl=="e":
-		mutation_fn = partial(mutate, 
-							  p_duplicate_split=cfg.p_duplicate_split, 
-							  p_duplicate_no_split=cfg.p_duplicate_no_split,
-							  p_add=cfg.p_add,
-							  p_rm=cfg.p_rm,
-							  p_mut=cfg.p_mut,
-							  sigma_mut=cfg.sigma_mut,
-							  shaper=prms_shaper)
+		dummy_encoder_prms = dummy_prms.encoding_model
+		encoder_mutation_fn = make_mutation_fn(dummy_encoder_prms, 
+											   p_duplicate_split=cfg.p_duplicate_split, 
+											   p_duplicate_no_split=cfg.p_duplicate_no_split,
+											   p_add=cfg.p_add,
+											   p_rm=cfg.p_rm,
+											   p_mut=cfg.p_mut,
+											   sigma_mut=cfg.sigma_mut)
+		
+		def _mutation_fn(prms: PyTree, key: jax.Array):
+			encoder_prms = encoder_mutation_fn(prms.encoding_model, key)
+			prms  = eqx.tree_at(lambda tree: tree.encoding_model, prms, encoder_prms)
+			return prms
+		mutation_fn = _mutation_fn
 
 	elif cfg.mdl=="rnd":
 		mutation_fn = lambda prms, key: prms + jr.normal(key, prms.shape)*cfg.sigma_mut
@@ -331,11 +331,9 @@ def simulate(cfg: Config):
 		raise NameError
 
 
-	_ravel_pytree = lambda x: ravel_pytree(x)[0]
-
-	agent_prms_fctry = lambda key: mutation_fn(_ravel_pytree(
-		eqx.filter(dummy_model, eqx.is_array)
-	), key)
+	agent_prms_fctry = lambda key: mutation_fn(
+		eqx.filter(dummy_model, eqx.is_array), key
+	)
 
 	#-------------------------------------------------------------------
 
@@ -343,7 +341,7 @@ def simulate(cfg: Config):
 
 		def _state_energy_cost_fn(state: Agent):
 			"""computes state energy cost"""
-			net: CTRNN = state.policy_state
+			net: TypeBasedSECTRNN = state.policy_state
 			# ---
 			assert net.mask is not None
 			# ---
@@ -461,10 +459,11 @@ def simulate(cfg: Config):
 		if cfg.mdl=="e":
 			networks = state.agents.policy_state
 			nb_sensors, nb_motors, nb_sensorimotors, nb_inters = jax.vmap(count_implicit_types)(networks)
-			prms: PyTree = prms_shaper.reshape(state.agents.prms)
-			types_vector = jax.vmap(lambda tree: ravel_pytree(tree)[0])(prms.types)
-			active_types = prms.types.active.sum(-1)
-			expressed_types = jnp.sum(jnp.round(prms.types.pi * prms.types.active * cfg.N_gain) > 0.0, axis=-1)
+			prms: PyTree = state.agents.prms
+			enc_prms = prms.encoding_model
+			types_vector = jax.vmap(lambda tree: ravel_pytree(tree)[0])(enc_prms.types)
+			active_types = enc_prms.types.active.sum(-1)
+			expressed_types = jnp.sum(jnp.round(enc_prms.types.pi * enc_prms.types.active * cfg.N_gain) > 0.0, axis=-1)
 			model_metrics = {
 				"network_sizes": jnp.where(alive, networks.mask.sum(-1), 0),
 				"nb_sensors": nb_sensors,
@@ -487,7 +486,7 @@ def simulate(cfg: Config):
 			"energy_levels": state.agents.energy,
 			"ages": state.agents.age,
 			"generations": state.agents.generation,
-			"genotypes": state.agents.prms.astype(jnp.float16),
+			"genotypes": jax.vmap(lambda tree: ravel_pytree(tree)[0])(state.agents.prms),
 			"offsprings": state.agents.n_offsprings,
 			"avg_offsprings": masked_mean(state.agents.n_offsprings, alive), 
 			"reproduction_rates": reproduction_rates,
@@ -656,19 +655,11 @@ if __name__ == '__main__':
 	warnings.filterwarnings('error', category=FutureWarning)
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
-		birth_pool_size=16, max_neurons=64, wandb_log=False, energy_concentration=100.,
+		birth_pool_size=16, max_neurons=64, wandb_log=True, energy_concentration=100.,
 		initial_food_density=1.0, mdl="e", cast_to_f16=True, debug=True, body_scale=10)
 	state, tools = simulate(cfg)
 	world = tools["world"]
 	plt.show()
-
-
-
-
-
-
-
-
 
 
 
