@@ -502,7 +502,7 @@ class GridWorld:
 		agents = state.agents
 		agents_i, agents_j = get_cell_index(agents.position).T
 		agents_alive_grid = jnp.zeros(self.size).at[agents_i, agents_j].add(agents.alive)
-		agents_scent_field = jsp.signal.convolve(agents_alive_grid, self.agent_scent_diffusion_kernel, method="fft", mode="same")
+		agents_scent_field = jsp.signal.convolve(agents_alive_grid, self.agent_scent_diffusion_kernel, mode="same")
 		
 		chemical_fields = jnp.concatenate([agents_scent_field[None], chemical_fields],axis=0)
 		chemical_fields = jnp.where(chemical_fields<self.chemical_detection_threshold, 0.0, chemical_fields) #C,H,W

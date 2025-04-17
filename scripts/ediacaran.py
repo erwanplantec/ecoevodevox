@@ -78,11 +78,12 @@ class Config(NamedTuple):
 	max_neurons: 			int   = 128
 	n_synaptic_markers: 	int   = 4
 	max_types: 				int   = 8
-	T_dev: 					float = 10.
+	T_dev: 					float = 10.0
 	dt_dev: 				float = 0.1
 	temp_decay: 			float = 0.90
 	extra_migration_fields: int   = 3
-	N_gain: 				float = 50.
+	N0:						int   = 8
+	N_gain: 				float = 50.0
 	connection_model: 		str   = "xoxt"
 	# --- ctrnn prms
 	T_ctrnn: 	float = 0.5
@@ -231,11 +232,15 @@ def make_agents_model(cfg: Config):
 						    policy_cfg=interface,
 						    body_shape="square",
 						    key=key)
-			model = eqx.tree_at(lambda p: [p.types.pi,p.types.s, p.types.m], 
+			model = eqx.tree_at(lambda p: [p.types.pi,p.types.s, p.types.m, p.connection_model], 
 								model, 
-								[model.types.pi.at[0].set(8.0/cfg.N_gain),
+								[model.types.pi.at[0].set(cfg.N0/cfg.N_gain),
 								 model.types.s.at[0,:].set(cfg.sensor_expression_threshold+0.01),
-								 model.types.m.at[0,:].set(cfg.motor_expression_threshold+0.01)])
+								 model.types.m.at[0,:].set(cfg.motor_expression_threshold+0.01),
+								 jax.tree.map(
+								 	lambda x: jnp.zeros_like(x) if eqx.is_array(x) else x,
+								 	model.connection_model)
+								])
 			return model
 		model_factory = _fctry
 
@@ -525,10 +530,13 @@ def simulate(cfg: Config):
 
 		alive = data["alive"]
 
+		if alive.sum()==0:
+			return {"population":0}
+
 		table_fields = []
 		fields = list(data.keys())
 		for field in fields:
-			if data[field].shape and data[field].shape[0]==alive.shape[0]:
+			if data[field].shape and data[field].shape[0]==alive.shape[0] and alive.sum():
 				arr = data[field][alive]
 				#arr = np.where(np.isnan(arr)|np.isinf(arr), 0.0, arr)
 				data[field] = arr
