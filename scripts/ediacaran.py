@@ -560,16 +560,8 @@ def simulate(cfg: Config):
 			table = wandb.Table(columns=table_fields+["_step"], data=table_data)
 			data["population_data"] = table
 
-		del data["alive"]
-		del data["genotypes"]
-		del data["generations"]
-		del data["moving"]
-		del data["types_vector"]
-		del data["food_map"]
-		del data["agents_pos"]
-		del data["actions"]
-		del data["obs_C"]
-		del data["obs_W"]
+		for field in table_fields:
+			del data[field]
 
 		return data
 
@@ -605,7 +597,7 @@ def simulate(cfg: Config):
 	state = world.reset(key_init)
 
 	if cfg.wandb_log:
-		wandb.init(project="eedx_ediacaran" if not cfg.debug else "DEBUG" , config=cfg._asdict())
+		wandb.init(project=cfg.wandb_project if not cfg.debug else "DEBUG" , config=cfg._asdict())
 
 	total_env_steps = 0
 

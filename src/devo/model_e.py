@@ -120,7 +120,7 @@ class Model_E(BaseDevelopmentalModel):
     # --- params ---
     types: NeuronType
     connection_model: PyTree
-    A: nn.MLP
+    synaptic_expression_model: nn.MLP
     # --- statics ---
     n_types: int
     max_nodes: int
@@ -175,7 +175,7 @@ class Model_E(BaseDevelopmentalModel):
         else:
             raise ValueError("no such conn model")
 
-        self.A = nn.MLP(n_synaptic_markers+n_fields, n_synaptic_markers, 16, 1, key=k2)
+        self.synaptic_expression_model = nn.MLP(n_synaptic_markers+n_fields, n_synaptic_markers, 32, 1, key=k2, activation=jnn.sigmoid)
         
         self.n_types = n_types
         self.max_nodes = max_nodes
@@ -218,7 +218,7 @@ class Model_E(BaseDevelopmentalModel):
             return self.migration_field(x) + jnp.sum(node_types.zeta * jnp.exp(-d/(node_types.gamma+1e-6)) * node_types.active[:,None], axis=0)
         
         M = jax.vmap(molecular_field)(xs)
-        g = jax.vmap(self.A)(jnp.concatenate([node_types.omega,M], axis=-1)) #n,2s+2
+        g = jax.vmap(self.synaptic_expression_model)(jnp.concatenate([node_types.omega,M], axis=-1)) #n,2s+2
         W = jax.vmap(jax.vmap(self.connection_model, in_axes=(0,None)), in_axes=(None,0))(g,g)
         W = W * (node_types.active[:,None] * node_types.active[None])
         
