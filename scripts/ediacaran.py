@@ -470,10 +470,10 @@ def simulate(cfg: Config):
 			top_neural_density    = jnp.where((networks.x[:,:,1]> cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
 			bottom_neural_density = jnp.where((networks.x[:,:,1]<-cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
 
-			make_impossible_moves = ((right_neural_density >0) & (state.agents.move_left_count >0)
-								    |(left_neural_density  >0) & (state.agents.move_right_count>0)
-								    |(top_neural_density   >0) & (state.agents.move_down_count >0)
-								    |(bottom_neural_density>0) & (state.agents.move_up_count   >0))
+			make_impossible_moves = ((right_neural_density ==0) & (state.agents.move_left_count >0)
+								    |(left_neural_density  ==0) & (state.agents.move_right_count>0)
+								    |(top_neural_density   ==0) & (state.agents.move_down_count >0)
+								    |(bottom_neural_density==0) & (state.agents.move_up_count   >0))
 
 			model_metrics = {
 				"network_sizes": jnp.where(alive, networks.mask.sum(-1), 0),
