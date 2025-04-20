@@ -465,10 +465,10 @@ def simulate(cfg: Config):
 			active_types = enc_prms.types.active.sum(-1)
 			expressed_types = jnp.sum(jnp.round(enc_prms.types.pi * enc_prms.types.active * cfg.N_gain) > 0.0, axis=-1)
 
-			right_neural_density  = jnp.where((networks.x[:,0]> cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
-			left_neural_density   = jnp.where((networks.x[:,0]<-cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
-			top_neural_density    = jnp.where((networks.x[:,1]> cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
-			bottom_neural_density = jnp.where((networks.x[:,1]<-cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
+			right_neural_density  = jnp.where((networks.x[:,:,0]> cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
+			left_neural_density   = jnp.where((networks.x[:,:,0]<-cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
+			top_neural_density    = jnp.where((networks.x[:,:,1]> cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
+			bottom_neural_density = jnp.where((networks.x[:,:,1]<-cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
 
 			make_impossible_moves = ((right_neural_density >0) & (state.agents.move_left_count >0)
 								    |(left_neural_density  >0) & (state.agents.move_right_count>0)
