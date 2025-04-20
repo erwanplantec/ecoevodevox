@@ -25,15 +25,6 @@ def forward_ctrnn(ctrnn: CTRNN, I: jax.Array, dt: float=0.1, f: Callable=jnn.tan
     v  = ctrnn.v + dt * (1/ctrnn.tau)  * dv
     return v * ctrnn.mask
 
-class CTRNNPolicyConfig(PyTreeNode):
-    # ---
-    encode_fn: Callable
-    decode_fn: Callable
-    activation_fn: Callable=jnn.tanh
-    dt: float=0.1
-    T: float=1.
-    # ---
-
 class CTRNNPolicy(BasePolicy):
     # --- CTRNN params ---
     activation_fn: Callable

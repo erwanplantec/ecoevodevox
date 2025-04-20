@@ -524,7 +524,7 @@ class GridWorld:
 		"""
 		"""
 		agents = state.agents
-		actions = jnp.where(agents.alive[:,None], actions, jnp.zeros(2, dtype=f16))
+		actions = jnp.where(agents.alive[:,None], actions, jnp.zeros((), f16))
 		actions = jnp.clip(actions, -self.max_action_norm, self.max_action_norm)
 		
 		move_left  = actions[:,1] < 0

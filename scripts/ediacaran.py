@@ -13,7 +13,7 @@ import wandb
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.devo.policy_network.ctrnn import CTRNN, CTRNNPolicy
+from src.devo.policy_network.ctrnn import CTRNNPolicy
 from src.eco.gridworld import (Agent, GridWorld,
 							   EnvState,
 							   FoodType,
@@ -177,7 +177,7 @@ def gridworld_motor_interface(
 	on_right = xs[:,0] 	> border_threshold
 	on_left = xs[:,0] 	< - border_threshold
 
-	forces = jnp.clip(v*m, 0.0, neurons_max_force) #forces applied by all neurons (N,)
+	forces = jnp.where(ctrnn.mask, jnp.clip(v*m, 0.0, neurons_max_force), 0.0) #forces applied by all neurons (N,)
 	N_force = jnp.where(on_bottom, 	forces, 0.0).sum() 	#type:ignore
 	S_force = jnp.where(on_top, 	forces, 0.0).sum()	#type:ignore
 	E_force = jnp.where(on_left, 	forces, 0.0).sum() 	#type:ignore
@@ -464,15 +464,31 @@ def simulate(cfg: Config):
 			types_vector = jax.vmap(lambda tree: ravel_pytree(tree)[0])(enc_prms.types)
 			active_types = enc_prms.types.active.sum(-1)
 			expressed_types = jnp.sum(jnp.round(enc_prms.types.pi * enc_prms.types.active * cfg.N_gain) > 0.0, axis=-1)
+
+			right_neural_density  = jnp.where(networks.x[:,0]> cfg.border_threshold, 1, 0).sum()
+			left_neural_density   = jnp.where(networks.x[:,0]<-cfg.border_threshold, 1, 0).sum()
+			top_neural_density    = jnp.where(networks.x[:,1]> cfg.border_threshold, 1, 0).sum()
+			bottom_neural_density = jnp.where(networks.x[:,1]<-cfg.border_threshold, 1, 0).sum()
+
+			make_impossible_moves = ((right_neural_density >0) & (state.agents.move_left_count >0)
+								    |(left_neural_density  >0) & (state.agents.move_right_count>0)
+								    |(top_neural_density   >0) & (state.agents.move_down_count >0)
+								    |(bottom_neural_density>0) & (state.agents.move_up_count   >0))
+
 			model_metrics = {
 				"network_sizes": jnp.where(alive, networks.mask.sum(-1), 0),
+				"right_neural_density": right_neural_density,
+				"left_neural_density": left_neural_density,
+				"top_neural_density": top_neural_density,
+				"bottom_neural_density": bottom_neural_density,
 				"nb_sensors": nb_sensors,
 				"nb_motors": nb_motors,
 				"nb_inters": nb_inters,
 				"nb_sensorimotors": nb_sensorimotors,
 				"active_types": active_types,
 				"expressed_types": expressed_types,
-				"types_vector": types_vector
+				"types_vector": types_vector,
+				"make_impossible_move": make_impossible_moves,
 			}
 		else:
 			model_metrics = {}
@@ -535,7 +551,7 @@ def simulate(cfg: Config):
 		table_fields = []
 		fields = list(data.keys())
 		for field in fields:
-			if data[field].shape and data[field].shape[0]==alive.shape[0] and alive.sum():
+			if data[field].shape and data[field].shape[0]==alive.shape[0]:
 				arr = data[field][alive]
 				#arr = np.where(np.isnan(arr)|np.isinf(arr), 0.0, arr)
 				data[field] = arr
