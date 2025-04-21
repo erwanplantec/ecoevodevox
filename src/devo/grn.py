@@ -1,29 +1,172 @@
+from typing import Callable
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import jax.nn as jnn
 import equinox as eqx
 import equinox.nn as nn
+from jaxtyping import Float, PyTree
+
+from .policy_network.rnn import SERNN
 
 from .base import BaseDevelopmentalModel
+from .model_e import XOXT
+
+def M(p, extra_zero_field=0):
+	m = jnp.stack([p[...,0], p[...,1], jnp.abs(p[...,0]), jnp.abs(p[...,1])], axis=-1)
+	if extra_zero_field:
+		m = jnp.concatenate([m, jnp.zeros((*m.shape[:-1],extra_zero_field))], axis=-1)
+	return m
+M_dims = 4
 
 class GRN(eqx.Module):
 	Win: nn.Linear
 	Wex: nn.Linear
 	dt: float
-	def __init__(self, nb_genes: int, input_dims: int, dt: float=0.03, *, key: jax.Array):
+	has_autonomous_decay: bool
+	expression_bounds: tuple[float,float]
+	def __init__(self, nb_genes: int, input_dims: int, dt: float=0.03, has_autonomous_decay: bool=True,
+				 expression_min: float=-jnp.inf, expression_max: float=jnp.inf,  *, key: jax.Array):
 		kin, kex, kpos = jr.split(key, 3)
 		self.Win = nn.Linear(nb_genes, nb_genes, key=kin, use_bias=True)
 		self.Wex = nn.Linear(input_dims, nb_genes, key=kex, use_bias=True)
 		self.dt = dt
+		self.has_autonomous_decay = has_autonomous_decay
+		self.expression_bounds = (expression_min, expression_max)
 	def __call__(self, s, x):
 		ds_dt = jnn.tanh(self.Win(s) + self.Wex(x))
-		return jnp.clip(s + self.dt * ds_dt, -1.0, 1.0)
+		if self.has_autonomous_decay:
+			ds_dt = ds_dt - s
+		return jnp.clip(s + self.dt * ds_dt, *self.expression_bounds)
+
+class SpatioemporalEncoder(eqx.Module):
+	encoder: nn.Linear
+	def __init__(self, encoding_dims: int, *, key: jax.Array):
+		self.encoder = nn.Linear(M_dims+1, encoding_dims, key=key)
+	def __call__(self, p, t):
+		m = M(p)
+		inp = jnp.concatenate([m,t[None]])
+		output = jnn.sigmoid(self.encoder(inp))
+		return output
+
+class State(SERNN):
+	s: jax.Array
+	m: jax.Array
 
 class GRNEncoding(BaseDevelopmentalModel):
 	# ---
 	grn: GRN
+	encoder: SpatioemporalEncoder
+	O: jax.Array
+	population: Float
+	nb_genes: int
+	population_gain: float
+	T: float
+	dt: float
+	max_population: int
+	gene_splitter: Callable
+	extra_migration_fields: int
 	# ---
-	def __init__(self, nb_genes: int):
+	def __init__(
+		self, 
+		nb_sensory_genes: int, nb_motor_genes: int, 
+		nb_synaptic_genes: int=4, nb_regulatory_genes: int=0,  
+		extra_migration_fields: int=0,
+		dt: float=0.03, T: float=10.0, 
+		population_gain: float=10., max_population: int=128,  
+		*, key: jax.Array):
 
-		self.grn = 
+		grn_key, encoder_key, conn_key = jr.split(key, 3)
+
+		migration_fields = M_dims + extra_migration_fields
+		nb_genes = (
+			nb_sensory_genes 
+			+ nb_motor_genes 
+			+ nb_synaptic_genes 
+			+ nb_regulatory_genes 
+			+ 2 * migration_fields) #chemotaxis + perturbations
+
+		def _gene_splitter(s):
+			sensory = s[...,:nb_sensory_genes]
+			i = nb_sensory_genes
+			motor = s[...,i:i+nb_motor_genes]
+			i = i+nb_motor_genes
+			synaptic = s[...,i:i+nb_synaptic_genes]
+			i = i+nb_synaptic_genes
+			migration = s[...,i:i+migration_fields]
+			i = i+migration_fields
+			perturbation = s[...,i:i+migration_fields]
+			i = i+migration_fields
+			regulatory = s[...,i:]
+			return sensory, motor, synaptic, migration, perturbation, regulatory
+		self.gene_splitter = _gene_splitter
+		
+		self.grn = GRN(nb_genes, nb_genes, key=grn_key)
+		self.encoder = SpatioemporalEncoder(nb_genes, key=encoder_key)
+		self.O = jr.normal(conn_key, (nb_synaptic_genes,)*2)
+		self.population = jnp.ones(())*8
+
+		self.nb_genes = nb_genes
+		self.dt=dt
+		self.T = T
+		self.population_gain = population_gain
+		self.max_population = max_population
+		self.extra_migration_fields = extra_migration_fields
+
+	# ---
+	def __call__(self, key: jax.Array) -> State:
+
+		mask = jnp.arange(self.max_population) < (self.population*self.population_gain)
+		
+		def _step(state, key):
+    
+			S, P, t = state
+
+			X = jax.vmap(self.encoder, in_axes=(0,None))(P, t)
+			S = jax.vmap(self.grn)(S, X)
+			_, _, _, migration_genes, perturbation_genes, _ = self.gene_splitter(S)
+
+			def M_(p):
+				dists = jnp.sum(jnp.square(p[None]-P), axis=-1, keepdims=True)
+				effect = jnp.where(mask[:,None], jnp.exp(-dists/0.1), 0.0)
+				perturbations = jnp.sum(perturbation_genes * effect, axis=0)
+				return M(p, self.extra_migration_fields) + perturbations
+
+			def energy_fn(p, phi):
+				m = M_(p)
+				field_energy = jnp.dot(m, phi)
+				return field_energy
+
+			dP = -jax.vmap(jax.grad(energy_fn))(P, migration_genes)
+			dP = dP + jr.normal(key, dP.shape)*0.02
+			vel = jnp.linalg.norm(dP, axis=-1, keepdims=True)
+			dP = jnp.where(vel>0.1, dP/vel*0.1, dP)
+			dP = jnp.where(mask[:,None], dP, 0.0); assert isinstance(dP, jax.Array)
+			P = jnp.clip(P+self.dt*dP, -1.0, 1.0)
+			return [S,P,t+self.dt], [S,P]
+
+		P0_key, dev_key = jr.split(key, 2)
+
+		S0 = jnp.zeros((self.max_population, self.nb_genes))
+		P0 = jr.uniform(P0_key, (self.max_population, 2), minval=-0.1, maxval=0.1)
+
+		[S,P, t], _ = jax.lax.scan(_step, [S0, P0, 0.0], jr.split(dev_key, int(self.T//self.dt)))
+		
+		sensory_genes, motor_genes, synaptic_genes, *_ = self.gene_splitter(S)
+		W = synaptic_genes @ self.O @ synaptic_genes.T
+		W = W * (mask[None]*mask[:,None])
+
+		return State(v=jnp.zeros(self.max_population),W=W, mask = mask, x=P, s=sensory_genes, m=motor_genes)
+
+if __name__ == '__main__':
+	import matplotlib.pyplot as plt
+	mdl = GRNEncoding(1, 1, 4, 8, 0, key=jr.key(1))
+	net = mdl(jr.key(2))
+	x = net.x[net.mask]
+	print(x)
+	plt.scatter(*x.T)
+	plt.show()
+
+
+
+

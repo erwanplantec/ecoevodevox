@@ -14,13 +14,8 @@ class RNN(PyTreeNode):
 	# ---
 	mask: jax.Array
 
-class SERNN(PyTreeNode):
+class SERNN(RNN):
 	x: Float[jax.Array, "N 2"]
-	v: Float[jax.Array, "N"]
-	W: Float[jax.Array, "N N"]
-	# ---
-	mask: jax.Array
-
 
 class RNNPolicy(BasePolicy):
 	# ---

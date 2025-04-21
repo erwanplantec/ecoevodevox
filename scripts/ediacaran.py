@@ -24,6 +24,7 @@ from src.eco.gridworld import (Agent, GridWorld,
 from src.devo.model_e import (Model_E,  
 							  make_mutation_fn,
 							  TypeBasedSECTRNN)
+from src.devo.grn import GRNEncoding
 from src.devo.utils import make_apply_init
 
 
@@ -78,15 +79,18 @@ class Config(NamedTuple):
 	# --- dev model
 	encoding_mdl: 			str   = "e"
 	max_neurons: 			int   = 128
-	n_synaptic_markers: 	int   = 4
-	max_types: 				int   = 8
 	T_dev: 					float = 10.0
 	dt_dev: 				float = 0.1
+	n_synaptic_markers: 	int   = 4
 	temp_decay: 			float = 0.90
 	extra_migration_fields: int   = 3
 	N0:						int   = 8
 	N_gain: 				float = 50.0
 	connection_model: 		str   = "xoxt"
+	# --- type based
+	max_types: 				int   = 8
+	# --- grn based
+	regulatory_genes: int=8
 	# --- policy
 	policy_mdl: str="rnn"
 	interface: str="se"
@@ -141,6 +145,15 @@ def make_agents_model(cfg: Config):
 			return encoding_model
 
 		encoding_model_factory = _encoding_mdl__fctry
+
+	elif cfg.encoding_mdl=="grn":
+
+		def _grn_mdl_fctry(key):
+			mdl = GRNEncoding(sensory_dimensions, motor_dimensions, cfg.n_synaptic_markers, cfg.regulatory_genes,
+				cfg.extra_migration_fields, cfg.dt_dev, cfg.T_dev, cfg.N_gain, cfg.max_neurons, key=key)
+			mdl = eqx.tree_at(lambda x: x.population, mdl, jnp.full_like(mdl.population, cfg.N0/cfg.N_gain))
+			return mdl
+		encoding_model_factory = _grn_mdl_fctry
 
 	# ---
 
@@ -223,7 +236,7 @@ def simulate(cfg: Config):
 	dummy_model, agent_init, agent_apply = make_agents_model(cfg)
 	interface = dummy_model.interface
 	dummy_prms = eqx.filter(dummy_model, eqx.is_array)
-	_, prms_shaper = ravel_pytree(dummy_prms)
+	flat_prms_like, prms_shaper = ravel_pytree(dummy_prms)
 	
 	#-------------------------------------------------------------------
 
@@ -237,13 +250,21 @@ def simulate(cfg: Config):
 											   p_mut=cfg.p_mut,
 											   sigma_mut=cfg.sigma_mut)
 		
-		def _mutation_fn(prms: PyTree, key: jax.Array):
+		def _e_mutation_fn(prms: PyTree, key: jax.Array):
 			encoder_prms = encoder_mutation_fn(prms.encoding_model, key)
 			prms  = eqx.tree_at(lambda tree: tree.encoding_model, prms, encoder_prms)
 			return prms
-		mutation_fn = _mutation_fn
+		mutation_fn = _e_mutation_fn
 
-	elif cfg.encoding_mdl=="rnd":
+	elif cfg.encoding_mdl in ["grn"]:
+
+		def _grn_mutation_fn(prms: PyTree, key: jax.Array):
+			epsilon = prms_shaper(jr.normal(key, flat_prms_like.shape)*cfg.sigma_mut)
+			prms = jax.tree.map(lambda x,e:x+e, prms, epsilon)
+			return prms
+		mutation_fn = _grn_mutation_fn
+
+	elif cfg.encoding_mdl in ["rnd"]:
 		mutation_fn = lambda prms, key: prms + jr.normal(key, prms.shape)*cfg.sigma_mut
 
 	else:
@@ -372,15 +393,12 @@ def simulate(cfg: Config):
 		observations = step_data["observations"]
 		# ---
 
-		if cfg.encoding_mdl=="e":
+		if cfg.encoding_mdl in["e","grn"]:
 			networks = state.agents.policy_state
 			nb_sensors, nb_motors, nb_sensorimotors, nb_inters = jax.vmap(count_implicit_types)(networks)
 			prms: PyTree = state.agents.prms
 			enc_prms = prms.encoding_model
 			network_sizes = jnp.where(alive, networks.mask.sum(-1), 0); assert isinstance(network_sizes, jax.Array)
-			types_vector = jax.vmap(lambda tree: ravel_pytree(tree)[0])(enc_prms.types)
-			active_types = enc_prms.types.active.sum(-1)
-			expressed_types = jnp.sum(jnp.round(enc_prms.types.pi * enc_prms.types.active * cfg.N_gain) > 0.0, axis=-1)
 
 			right_neural_density  = jnp.where((networks.x[:,:,0]> cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
 			left_neural_density   = jnp.where((networks.x[:,:,0]<-cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
@@ -408,11 +426,15 @@ def simulate(cfg: Config):
 				"nb_motors": nb_motors,
 				"nb_inters": nb_inters,
 				"nb_sensorimotors": nb_sensorimotors,
-				"active_types": active_types,
-				"expressed_types": expressed_types,
-				"types_vector": types_vector,
 				"make_impossible_move": make_impossible_moves,
 			}
+			if cfg.encoding_mdl=="e":
+				types_vector = jax.vmap(lambda tree: ravel_pytree(tree)[0])(enc_prms.types)
+				active_types = enc_prms.types.active.sum(-1)
+				expressed_types = jnp.sum(jnp.round(enc_prms.types.pi * enc_prms.types.active * cfg.N_gain) > 0.0, axis=-1)
+				model_metrics["active_types"] = active_types
+				model_metrics["expressed_types"] = expressed_types
+				model_metrics["types_vector"] = types_vector
 		else:
 			model_metrics = {}
 
@@ -587,7 +609,7 @@ if __name__ == '__main__':
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
 		birth_pool_size=16, max_neurons=64, wandb_log=True, energy_concentration=100.,
-		initial_food_density=1.0, encoding_mdl="e", cast_to_f16=True, debug=True, body_scale=10,
+		initial_food_density=1.0, encoding_mdl="grn", cast_to_f16=True, debug=True, body_scale=10,
 		policy_mdl="rnn")
 	state, tools = simulate(cfg)
 	world = tools["world"]
