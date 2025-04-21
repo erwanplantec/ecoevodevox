@@ -266,8 +266,8 @@ def simulate(cfg: Config):
 			assert isinstance(interface, SpatiallyEmbeddedNetworkInterface)
 			# ---
 			nb_neurons = net.mask.sum()
-			s_expressed = interface.sensory_expression(net)
-			m_expressed = interface.motor_expression(net)
+			s_expressed = jnp.abs(interface.sensory_expression(net))
+			m_expressed = jnp.abs(interface.motor_expression(net))
 			D = jnp.linalg.norm(net.x[:,None]-net.x[None], axis=-1)
 			W = jnp.where(net.mask[None]&net.mask[:,None], net.W, 0.0)
 			connection_materials = jnp.abs(W) * D
