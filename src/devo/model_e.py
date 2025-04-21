@@ -1,6 +1,8 @@
 from chex import ArrayTree
 from jax.flatten_util import ravel_pytree
+
 from .base import BaseDevelopmentalModel
+from .policy_network.rnn import SERNN
 from .policy_network.ctrnn import SECTRNN
 
 import jax
@@ -20,14 +22,38 @@ from jaxtyping import (
     Int8, Int16, Int32,
     UInt8, UInt16, UInt32)
 
+
+class TypeBasedSERNN(SERNN):
+    """Type Based Spatially Embedded CTRNN"""
+    s: jax.Array
+    m: jax.Array
+    id_: jax.Array
+
 class TypeBasedSECTRNN(SECTRNN):
     """Type Based Spatially Embedded CTRNN"""
     s: jax.Array
     m: jax.Array
     id_: jax.Array
 
+class RNNNeuronType(PyTreeNode):
+    # ---
+    pi:     Float32|Float16
+    active: Bool
+    # -- Migration Parameters ---
+    psi:    Float32|Float16 # molecular affinity
+    zeta:   Float32|Float16 # molecular pertubation
+    gamma:  Float32|Float16 # repulsion distance decay coefficients
+    theta:  Float32|Float16
+    # --- Connection Parameters ---
+    omega:  Float32|Float16 # type-specific gene expression
+    # --- interface
+    s:      Float32|Float16 # expression of sensory elements
+    m:      Float32|Float16 # expression of motor characteristics
+    # ---
+    id_:    UInt8|None=None
 
-class NeuronType(PyTreeNode):
+
+class CTRNNNeuronType(PyTreeNode):
     # ---
     pi:     Float32|Float16
     active: Bool
@@ -42,6 +68,7 @@ class NeuronType(PyTreeNode):
     tau:    Float32|Float16
     bias:   Float32|Float16
     gain:   Float32|Float16
+    # --- interface
     s:      Float32|Float16 # expression of sensory elements
     m:      Float32|Float16 # expression of motor characteristics
     # ---
@@ -118,10 +145,11 @@ class MLPConn(nn.MLP):
     
 class Model_E(BaseDevelopmentalModel):
     # --- params ---
-    types: NeuronType
+    types: RNNNeuronType|CTRNNNeuronType
     connection_model: PyTree
     synaptic_expression_model: nn.MLP
     # --- statics ---
+    network_type: str
     n_types: int
     max_nodes: int
     dt: float
@@ -144,6 +172,7 @@ class Model_E(BaseDevelopmentalModel):
         N_gain: float=10.0,  
         body_shape: str="square", 
         connection_model: str="xoxt", 
+        network_type: str="rnn",
         *,
         key: jax.Array):
         
@@ -151,21 +180,37 @@ class Model_E(BaseDevelopmentalModel):
 
         n_fields = N_MORPHOGENS + extra_migration_fields
         self.migration_field = lambda x: jnp.concatenate([migration_field(x),jnp.zeros(extra_migration_fields)])
+        self.network_type = network_type
         
-        types = NeuronType(
-            pi     = jnp.zeros(n_types),
-            psi    = jnp.zeros((n_types, n_fields)),
-            gamma  = jnp.zeros((n_types, n_fields))+0.001,
-            zeta   = jnp.zeros((n_types, n_fields)),
-            omega  = jnp.zeros((n_types, n_synaptic_markers)),
-            theta  = jnp.ones((n_types,2)).at[:,0].set(0.01),
-            active = jnp.zeros(n_types, dtype=bool).at[0].set(True),
-            s      = jnp.zeros((n_types,sensory_dimensions)),
-            m      = jnp.zeros((n_types, motor_dimensions)),
-            tau    = jnp.ones(n_types),
-            bias   = jnp.zeros(n_types),
-            gain   = jnp.ones(n_types)
-        )
+        if network_type=="ctrnn":
+            types = CTRNNNeuronType(
+                pi     = jnp.zeros(n_types),
+                psi    = jnp.zeros((n_types, n_fields)),
+                gamma  = jnp.zeros((n_types, n_fields))+0.001,
+                zeta   = jnp.zeros((n_types, n_fields)),
+                omega  = jnp.zeros((n_types, n_synaptic_markers)),
+                theta  = jnp.ones((n_types,2)).at[:,0].set(0.01),
+                active = jnp.zeros(n_types, dtype=bool).at[0].set(True),
+                s      = jnp.zeros((n_types,sensory_dimensions)),
+                m      = jnp.zeros((n_types, motor_dimensions)),
+                tau    = jnp.ones(n_types),
+                bias   = jnp.zeros(n_types),
+                gain   = jnp.ones(n_types)
+            )
+        elif network_type=="rnn":
+            types = RNNNeuronType(
+                pi     = jnp.zeros(n_types),
+                psi    = jnp.zeros((n_types, n_fields)),
+                gamma  = jnp.zeros((n_types, n_fields))+0.001,
+                zeta   = jnp.zeros((n_types, n_fields)),
+                omega  = jnp.zeros((n_types, n_synaptic_markers)),
+                theta  = jnp.ones((n_types,2)).at[:,0].set(0.01),
+                active = jnp.zeros(n_types, dtype=bool).at[0].set(True),
+                s      = jnp.zeros((n_types,sensory_dimensions)),
+                m      = jnp.zeros((n_types, motor_dimensions)),
+            )
+        else:
+            raise NameError(f"{network_type} is not a valid network type")
         
         self.types = types
         if connection_model=="xoxt":
@@ -185,7 +230,7 @@ class Model_E(BaseDevelopmentalModel):
         self.N_gain = N_gain
         self.body_shape = body_shape
     # ---
-    def __call__(self, key: jax.Array)->TypeBasedSECTRNN:
+    def __call__(self, key: jax.Array)->TypeBasedSECTRNN|TypeBasedSERNN:
         
         # 1. Initialize neurons
         x0 = jr.normal(key, (self.max_nodes, 2)) * 0.1
@@ -222,18 +267,31 @@ class Model_E(BaseDevelopmentalModel):
         W = jax.vmap(jax.vmap(self.connection_model, in_axes=(0,None)), in_axes=(None,0))(g,g)
         W = W * (node_types.active[:,None] * node_types.active[None])
         
-        network = TypeBasedSECTRNN(
-            v    = jnp.zeros(xs.shape[0]), 
-            x    = xs, 
-            W    = W, 
-            tau  = node_types.tau, 
-            gain = node_types.gain, 
-            bias = node_types.bias, 
-            s    = node_types.s, 
-            m    = node_types.m, 
-            id_  = node_types.id_, 
-            mask = node_types.active
-        )
+        if self.network_type=="ctrnn":
+            network = TypeBasedSECTRNN(
+                v    = jnp.zeros(xs.shape[0]), 
+                x    = xs, 
+                W    = W, 
+                tau  = node_types.tau, 
+                gain = node_types.gain, 
+                bias = node_types.bias, 
+                s    = node_types.s, 
+                m    = node_types.m, 
+                id_  = node_types.id_, 
+                mask = node_types.active
+            )
+        elif self.network_type=="rnn":
+            network = TypeBasedSERNN(
+                v    = jnp.zeros(xs.shape[0]), 
+                x    = xs, 
+                W    = W, 
+                s    = node_types.s, 
+                m    = node_types.m, 
+                id_  = node_types.id_, 
+                mask = node_types.active
+            )
+        else:
+            raise NameError(f"{self.network_type} is not a valid network type")
         
         return network
     # ---

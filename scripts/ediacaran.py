@@ -13,6 +13,8 @@ import wandb
 import matplotlib.pyplot as plt
 import numpy as np
 
+from src.eco.interface import SpatiallyEmbeddedNetworkInterface
+from src.devo.policy_network.rnn import RNNPolicy
 from src.devo.policy_network.ctrnn import CTRNNPolicy
 from src.eco.gridworld import (Agent, GridWorld,
 							   EnvState,
@@ -74,7 +76,7 @@ class Config(NamedTuple):
 	passive_eating: 			bool  = True
 	passive_reproduction: 		bool  = True
 	# --- dev model
-	mdl: 					str   = "e"
+	encoding_mdl: 			str   = "e"
 	max_neurons: 			int   = 128
 	n_synaptic_markers: 	int   = 4
 	max_types: 				int   = 8
@@ -85,6 +87,9 @@ class Config(NamedTuple):
 	N0:						int   = 8
 	N_gain: 				float = 50.0
 	connection_model: 		str   = "xoxt"
+	# --- policy
+	policy_mdl: str="rnn"
+	interface: str="se"
 	# --- ctrnn prms
 	T_ctrnn: 	float = 0.5
 	dt_ctrnn: 	float = 0.1
@@ -97,121 +102,21 @@ class Config(NamedTuple):
 	p_add: 					float = 1e-3
 
 
-def sensory_expression(
-	ctrnn: TypeBasedSECTRNN,
-	sensor_activation: Callable=jnn.tanh,
-	expression_threshold: float=0.03):
-	s = ctrnn.s * ctrnn.mask[:,None]
-	s = jnp.where(jnp.abs(s)>expression_threshold, s, 0.0)
-	s = sensor_activation(s) #neurons,ds
-	return s
 
-def gridworld_sensory_interface(
-	obs: Observation, 
-	ctrnn: TypeBasedSECTRNN, 
-	sensor_activation: Callable=jnn.tanh,
-	expression_threshold: float=0.03,
-	border_threshold: float=0.9):
-	# ---
-	assert ctrnn.s is not None
-	# ---
-	xs = ctrnn.x
-	s = sensory_expression(ctrnn, sensor_activation, expression_threshold)
-	# ---
-	C = obs.chemicals # mC,W,W
-	W = obs.walls
-	mC, D, _ = C.shape
-
-	on_border = jnp.any(jnp.abs(xs)>border_threshold, axis=-1) #check if neuron is on border (epithelial layer)
-	_xs = (xs.at[:,1].multiply(-1)+1)/2.0001 #make sure it does not reach upper bound
-	coords = jnp.floor(_xs * D)
-	coords = coords.astype(jnp.int16)
-	j, i = coords.T
-
-	Ic = jnp.where(on_border, jnp.sum(C[:,i,j].T * s[:,:mC], axis=1), 0.0) # chemical input #type:ignore
-	Iw = jnp.where(on_border, jnp.sum(W[:,i,j].T * s[:,mC:mC+1], axis=1), 0.0) # walls input #type:ignore
-	Ii = jnp.sum(s[:, mC+1:] * obs.internal, axis=1) # internal input #type:ignore
-
-	I = Ic + Iw + Ii
-	return I
-
-def motor_expression(
-	ctrnn: TypeBasedSECTRNN,
-	border_threshold: float=0.9,
-	expression_threshold:float=0.03,
-	m_activation: Callable=lambda m: jnp.clip(m, 0.0, 1.0)):
-	# ---
-	assert ctrnn.m is not None
-	assert ctrnn.mask is not None
-	# ---
-	m = ctrnn.m * ctrnn.mask[:,None]
-	m = jnp.where(jnp.abs(m)>expression_threshold, m, 0.0)
-	m = m_activation(m)
-	on_border = jnp.any(jnp.abs(ctrnn.x)>border_threshold, axis=-1)
-	m = jnp.where(on_border[:,None], m, 0.0)
-	assert isinstance(m, jax.Array)
-	return m
-
-
-def gridworld_motor_interface(
-	ctrnn: TypeBasedSECTRNN, 
-	border_threshold: float=0.9,
-	expression_threshold:float=0.03,
-	m_activation: Callable=lambda m: jnp.clip(m, 0.0, 1.0),
-	threshold_to_move: float=0.1,
-	neurons_max_force: float=0.1,
-	max_total_force: float=5.0,
-	pos_dtype: type=jnp.int16):
-	# ---
-	assert ctrnn.m is not None
-	# --- 
-	xs = ctrnn.x
-	m = motor_expression(ctrnn, border_threshold, 
-		expression_threshold, m_activation)[:,0]
-	v = ctrnn.v
-	# ---
-	xs = xs * jnn.one_hot(jnp.argmax(jnp.abs(xs), axis=-1), 2)
-
-	on_top = xs[:,1] 	> border_threshold
-	on_bottom = xs[:,1] < - border_threshold
-	on_right = xs[:,0] 	> border_threshold
-	on_left = xs[:,0] 	< - border_threshold
-
-	forces = jnp.where(ctrnn.mask, jnp.clip(v*m, 0.0, neurons_max_force), 0.0) #forces applied by all neurons (N,)
-	N_force = jnp.where(on_bottom, 	forces, 0.0).sum() 	#type:ignore
-	S_force = jnp.where(on_top, 	forces, 0.0).sum()	#type:ignore
-	E_force = jnp.where(on_left, 	forces, 0.0).sum() 	#type:ignore
-	W_force = jnp.where(on_right, 	forces, 0.0).sum() 	#type:ignore
-
-	directional_forces = jnp.array([N_force, S_force, E_force, W_force]) # 4,
-	directions = jnp.array([[-1,0],[1,0],[0,1],[0,-1]], dtype=pos_dtype)
-	
-	net_directional_force = jnp.sum(directional_forces[:,None] * directions, axis=0) #2,
-	move = jnp.where(jnp.abs(net_directional_force)>threshold_to_move, #if force on component is above threshold
-					 jnp.clip(net_directional_force, -max_total_force, max_total_force), # move on unit
-					 0.0).astype(jnp.float16) # don't move
-	return move
 
 #-------------------------------------------------------------------
 
 def make_agents_model(cfg: Config):
 	"""
 	"""
-	encode_fn=partial(gridworld_sensory_interface, 
-						  border_threshold=cfg.border_threshold,
-						  expression_threshold=cfg.sensor_expression_threshold)
-	decode_fn=partial(gridworld_motor_interface, 
-					  threshold_to_move=cfg.force_threshold_to_move,
-					  border_threshold=cfg.border_threshold, 
-					  neurons_max_force=cfg.neurons_max_motor_force)
 
 	sensory_dimensions = cfg.n_food_types + 3
 	motor_dimensions = 1 + int(not cfg.passive_eating) + int(not cfg.passive_reproduction)
 
-	if cfg.mdl=="e":
-		def _fctry(key):
+	if cfg.encoding_mdl=="e":
+		def _encoding_mdl__fctry(key):
 			
-			model = Model_E(n_types=cfg.max_types, 
+			encoding_model = Model_E(n_types=cfg.max_types, 
 						    n_synaptic_markers=cfg.n_synaptic_markers,
 						    max_nodes=cfg.max_neurons,
 						    sensory_dimensions=sensory_dimensions,
@@ -223,42 +128,55 @@ def make_agents_model(cfg: Config):
 						    N_gain=cfg.N_gain,
 						    body_shape="square",
 						    key=key)
-			model = eqx.tree_at(lambda p: [p.types.pi,p.types.s, p.types.m, p.connection_model], 
-								model, 
-								[model.types.pi.at[0].set(cfg.N0/cfg.N_gain),
-								 model.types.s.at[0,:].set(cfg.sensor_expression_threshold+0.01),
-								 model.types.m.at[0,:].set(cfg.motor_expression_threshold+0.01),
+			encoding_model = eqx.tree_at(lambda p: [p.types.pi,p.types.s, p.types.m, p.connection_model], 
+								encoding_model, 
+								[encoding_model.types.pi.at[0].set(cfg.N0/cfg.N_gain),
+								 encoding_model.types.s.at[0,:].set(cfg.sensor_expression_threshold+0.01),
+								 encoding_model.types.m.at[0,:].set(cfg.motor_expression_threshold+0.01),
 								 jax.tree.map(
 								 	lambda x: jnp.zeros_like(x) if eqx.is_array(x) else x,
-								 	model.connection_model)
+								 	encoding_model.connection_model)
 								])
-			model = CTRNNPolicy(model, encode_fn, decode_fn, cfg.dt_ctrnn, cfg.T_ctrnn)
 			
-			return model
+			return encoding_model
 
-		model_factory = _fctry
-
-	# ---
-
-	elif cfg.mdl=="rnd":
-		class RandomAgent(eqx.Module):
-			logits: jax.Array
-			def __init__(self, key):
-				self.logits = jr.normal(key, (5,))
-			def __call__(self, obs, state, key):
-				actions = jnp.array([[0,0],[0,1],[0,-1],[1,0], [-1,0]], dtype=jnp.int16)
-				action_id = jr.categorical(key, self.logits)
-				action = actions[action_id]
-				return action, state
-			def initialize(self, key):
-				return 0
-
-		model_factory = lambda key: RandomAgent(key)
+		encoding_model_factory = _encoding_mdl__fctry
 
 	# ---
 
 	else:
-		raise NameError(f"model {cfg.mdl} is not valid")
+		raise NameError(f"model {cfg.encoding_mdl} is not valid")
+
+	#-------------------------------------------------------------------
+
+	if cfg.interface=="se":
+		interface = SpatiallyEmbeddedNetworkInterface(cfg.sensor_expression_threshold,
+													  jnn.tanh,
+													  cfg.motor_expression_threshold,
+													  border_threshold=cfg.border_threshold,
+													  max_neuron_force=cfg.neurons_max_motor_force,
+													  force_threshold_to_move=cfg.force_threshold_to_move,
+													  max_motor_force=cfg.max_total_motor_force)
+	else: 
+		raise NameError(f"{cfg.interface} is not a valid interface")
+
+
+	if cfg.policy_mdl=="rnn":
+		def _rnn_mdl_factory(key):
+			encoding_mdl = encoding_model_factory(key)
+			mdl = RNNPolicy(encoding_mdl, interface)
+			return mdl
+		model_factory = _rnn_mdl_factory
+	elif  cfg.policy_mdl=="ctrnn":
+		def _ctrnn_mdl_factory(key):
+			encoding_mdl = encoding_model_factory(key)
+			mdl = CTRNNPolicy(encoding_mdl, interface, cfg.dt_ctrnn, cfg.T_ctrnn)
+			return mdl
+		model_factory = _ctrnn_mdl_factory
+	else:
+		raise NameError(f"no policy model: {cfg.policy_mdl}")
+
+	#-------------------------------------------------------------------
 
 	_dummy_model = model_factory(jr.key(0))
 	_agent_apply, _agent_init = make_apply_init(_dummy_model, reshape_prms=False)
@@ -303,12 +221,13 @@ def simulate(cfg: Config):
 	#-------------------------------------------------------------------
 
 	dummy_model, agent_init, agent_apply = make_agents_model(cfg)
+	interface = dummy_model.interface
 	dummy_prms = eqx.filter(dummy_model, eqx.is_array)
 	_, prms_shaper = ravel_pytree(dummy_prms)
 	
 	#-------------------------------------------------------------------
 
-	if cfg.mdl=="e":
+	if cfg.encoding_mdl=="e":
 		dummy_encoder_prms = dummy_prms.encoding_model
 		encoder_mutation_fn = make_mutation_fn(dummy_encoder_prms, 
 											   p_duplicate_split=cfg.p_duplicate_split, 
@@ -324,7 +243,7 @@ def simulate(cfg: Config):
 			return prms
 		mutation_fn = _mutation_fn
 
-	elif cfg.mdl=="rnd":
+	elif cfg.encoding_mdl=="rnd":
 		mutation_fn = lambda prms, key: prms + jr.normal(key, prms.shape)*cfg.sigma_mut
 
 	else:
@@ -337,19 +256,18 @@ def simulate(cfg: Config):
 
 	#-------------------------------------------------------------------
 
-	if cfg.mdl=="e":
+	if cfg.encoding_mdl=="e":
 
 		def _state_energy_cost_fn(state: Agent):
 			"""computes state energy cost"""
 			net: TypeBasedSECTRNN = state.policy_state
 			# ---
 			assert net.mask is not None
+			assert isinstance(interface, SpatiallyEmbeddedNetworkInterface)
 			# ---
 			nb_neurons = net.mask.sum()
-			s_expressed = jnp.abs(sensory_expression(net, expression_threshold=cfg.sensor_expression_threshold))
-			m_expressed = motor_expression(net, 
-										   border_threshold=cfg.border_threshold, 
-										   expression_threshold=cfg.motor_expression_threshold)
+			s_expressed = interface.sensory_expression(net)
+			m_expressed = interface.motor_expression(net)
 			D = jnp.linalg.norm(net.x[:,None]-net.x[None], axis=-1)
 			W = jnp.where(net.mask[None]&net.mask[:,None], net.W, 0.0)
 			connection_materials = jnp.abs(W) * D
@@ -425,13 +343,11 @@ def simulate(cfg: Config):
 	#-------------------------------------------------------------------
 
 	def count_implicit_types(ctrnn):
+		assert isinstance(interface, SpatiallyEmbeddedNetworkInterface)
 		msk = ctrnn.mask > 0.0
-		is_sensor = sensory_expression(ctrnn, 
-									   expression_threshold=cfg.sensor_expression_threshold).astype(bool)
+		is_sensor = interface.sensory_expression(ctrnn).astype(bool)
 		is_sensor = jnp.any(is_sensor, -1)
-		is_motor = motor_expression(ctrnn,
-									border_threshold=cfg.border_threshold,
-									expression_threshold=cfg.motor_expression_threshold).astype(bool)
+		is_motor = interface.motor_expression(ctrnn).astype(bool)
 		is_motor = jnp.any(is_motor, -1)
 		is_sensorimotor = is_sensor & is_motor
 		is_sensor_only = (~is_motor) & is_sensor
@@ -456,11 +372,12 @@ def simulate(cfg: Config):
 		observations = step_data["observations"]
 		# ---
 
-		if cfg.mdl=="e":
+		if cfg.encoding_mdl=="e":
 			networks = state.agents.policy_state
 			nb_sensors, nb_motors, nb_sensorimotors, nb_inters = jax.vmap(count_implicit_types)(networks)
 			prms: PyTree = state.agents.prms
 			enc_prms = prms.encoding_model
+			network_sizes = jnp.where(alive, networks.mask.sum(-1), 0); assert isinstance(network_sizes, jax.Array)
 			types_vector = jax.vmap(lambda tree: ravel_pytree(tree)[0])(enc_prms.types)
 			active_types = enc_prms.types.active.sum(-1)
 			expressed_types = jnp.sum(jnp.round(enc_prms.types.pi * enc_prms.types.active * cfg.N_gain) > 0.0, axis=-1)
@@ -470,13 +387,19 @@ def simulate(cfg: Config):
 			top_neural_density    = jnp.where((networks.x[:,:,1]> cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
 			bottom_neural_density = jnp.where((networks.x[:,:,1]<-cfg.border_threshold)&(networks.mask), 1, 0).sum(-1)
 
+			lateralization = jnp.max(
+				jnp.stack([right_neural_density, left_neural_density, top_neural_density, bottom_neural_density], axis=-1),
+				axis=-1
+			)
+			lateralization = jnp.where(network_sizes>0, lateralization/network_sizes, 0)
+
 			make_impossible_moves = ((right_neural_density ==0) & (state.agents.move_left_count >0)
 								    |(left_neural_density  ==0) & (state.agents.move_right_count>0)
 								    |(top_neural_density   ==0) & (state.agents.move_down_count >0)
 								    |(bottom_neural_density==0) & (state.agents.move_up_count   >0))
 
 			model_metrics = {
-				"network_sizes": jnp.where(alive, networks.mask.sum(-1), 0),
+				"network_sizes": network_sizes,
 				"right_neural_density": right_neural_density,
 				"left_neural_density": left_neural_density,
 				"top_neural_density": top_neural_density,
@@ -664,7 +587,8 @@ if __name__ == '__main__':
 
 	cfg = Config(size=(64,64), T_dev=1.0, max_agents=32, initial_agents=16, 
 		birth_pool_size=16, max_neurons=64, wandb_log=True, energy_concentration=100.,
-		initial_food_density=1.0, mdl="e", cast_to_f16=True, debug=True, body_scale=10)
+		initial_food_density=1.0, encoding_mdl="e", cast_to_f16=True, debug=True, body_scale=10,
+		policy_mdl="rnn")
 	state, tools = simulate(cfg)
 	world = tools["world"]
 	plt.show()

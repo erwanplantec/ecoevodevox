@@ -30,6 +30,7 @@ type KeyArray = jax.Array
 type AgentState = PyTree
 type AgentParams = jax.Array
 type Action = jax.Array
+type Info = dict
 
 @jax.jit
 def get_cell_index(pos: Float16):
@@ -282,11 +283,12 @@ class GridWorld:
 		key, key_action = jr.split(key)
 		observations = self._get_observations(state)
 		
-		actions, policy_states = self.mapped_agent_apply(state.agents.prms, 
-											 			 observations, 
-											 			 state.agents.policy_state, 
-											 			 jr.split(key_action, self.max_agents), 
-											 			 state.agents.alive)
+		actions, policy_states = self.mapped_agent_apply(
+			state.agents.prms, 
+			observations, 
+			state.agents.policy_state, 
+			jr.split(key_action, self.max_agents), 
+			state.agents.alive)
 		actions = actions.astype(jnp.int16)
 		state = eqx.tree_at(lambda s: s.agents.policy_state, state, policy_states)
 		state, actions_data = self._apply_actions(state, actions)
