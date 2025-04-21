@@ -277,7 +277,7 @@ def simulate(cfg: Config):
 
 	#-------------------------------------------------------------------
 
-	if cfg.encoding_mdl=="e":
+	if cfg.interface=="se":
 
 		def _state_energy_cost_fn(state: Agent):
 			"""computes state energy cost"""
