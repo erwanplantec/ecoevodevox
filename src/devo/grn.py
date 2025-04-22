@@ -41,9 +41,9 @@ class GRN(eqx.Module):
 
 class SpatioemporalEncoder(eqx.Module):
 	encoder: nn.MLP
-	def __init__(self, encoding_dims: int, *, key: jax.Array):
+	def __init__(self, encoding_dims: int, activation: Callable=jnn.tanh, *, key: jax.Array):
 		self.encoder = nn.MLP(M_dims+1, encoding_dims, 32, 1, 
-			final_activation=jnn.tanh, activation=jnn.tanh, key=key)
+			final_activation=activation, activation=activation, key=key)
 	def __call__(self, p, t):
 		m = M(p)
 		inp = jnp.concatenate([m,t[None]])
@@ -59,6 +59,7 @@ class GRNEncoding(BaseDevelopmentalModel):
 	grn: GRN
 	encoder: SpatioemporalEncoder
 	O: jax.Array
+	gene_to_migration_prms: nn.Linear
 	population: Float
 	nb_genes: int
 	population_gain: float
@@ -77,7 +78,7 @@ class GRNEncoding(BaseDevelopmentalModel):
 		population_gain: float=10., max_population: int=128,  
 		*, key: jax.Array):
 
-		grn_key, encoder_key, conn_key = jr.split(key, 3)
+		grn_key, encoder_key, conn_key, g2p_key = jr.split(key, 4)
 
 		migration_fields = M_dims + extra_migration_fields
 		nb_genes = (
@@ -94,18 +95,19 @@ class GRNEncoding(BaseDevelopmentalModel):
 			i = i+nb_motor_genes
 			synaptic = s[...,i:i+nb_synaptic_genes]
 			i = i+nb_synaptic_genes
-			migration = s[...,i:i+migration_fields]
-			i = i+migration_fields
+			migration = s[...,i:i+migration_fields+1]
+			i = i+migration_fields+1
 			perturbation = s[...,i:i+migration_fields]
 			i = i+migration_fields
 			regulatory = s[...,i:]
 			return sensory, motor, synaptic, migration, perturbation, regulatory
 		self.gene_splitter = _gene_splitter
 		
-		self.grn = GRN(nb_genes, nb_genes, key=grn_key)
+		self.grn = GRN(nb_genes, nb_genes, expression_max=1.0, expression_min=-1.0, has_autonomous_decay=False, key=grn_key)
 		self.encoder = SpatioemporalEncoder(nb_genes, key=encoder_key)
-		self.O = jr.normal(conn_key, (nb_synaptic_genes,)*2)
-		self.population = jnp.ones(())*8
+		self.O = jr.normal(conn_key, (nb_synaptic_genes,)*2)*0.1
+		self.gene_to_migration_prms = nn.Linear(migration_fields, migration_fields, use_bias=False, key=g2p_key)
+		self.population = jnp.ones(())* (8.0 / population_gain) 
 
 		self.nb_genes = nb_genes
 		self.dt=dt
@@ -119,9 +121,10 @@ class GRNEncoding(BaseDevelopmentalModel):
 
 		mask = jnp.arange(self.max_population) < (self.population*self.population_gain)
 		
-		def _step(state, key):
+		def _step(_, state):
     
-			S, P, t = state
+			S, P, t, key = state
+			key, key_noise = jr.split(key)
 
 			X = jax.vmap(self.encoder, in_axes=(0,None))(P, t)
 			S = jax.vmap(self.grn)(S, X)
@@ -138,20 +141,21 @@ class GRNEncoding(BaseDevelopmentalModel):
 				field_energy = jnp.dot(m, phi)
 				return field_energy
 
-			dP = -jax.vmap(jax.grad(energy_fn))(P, migration_genes)
-			dP = dP + jr.normal(key, dP.shape)*0.02
+			dP = -jax.vmap(jax.grad(energy_fn))(P, migration_genes[:,1:]) * jnp.clip(migration_genes[:,:1], 0.0, 1.0)
+			dP = dP + jr.normal(key_noise, dP.shape)*0.02
 			vel = jnp.linalg.norm(dP, axis=-1, keepdims=True)
 			dP = jnp.where(vel>0.1, dP/vel*0.1, dP)
 			dP = jnp.where(mask[:,None], dP, 0.0); assert isinstance(dP, jax.Array)
 			P = jnp.clip(P+self.dt*dP, -1.0, 1.0)
-			return [S,P,t+self.dt], [S,P]
+			
+			return [S,P,t+self.dt,key]
 
 		P0_key, dev_key = jr.split(key, 2)
 
 		S0 = jnp.zeros((self.max_population, self.nb_genes))
 		P0 = jr.uniform(P0_key, (self.max_population, 2), minval=-0.1, maxval=0.1)
 
-		[S,P, t], _ = jax.lax.scan(_step, [S0, P0, 0.0], jr.split(dev_key, int(self.T//self.dt)))
+		S,P, *_ = jax.lax.fori_loop(0, int(self.T//self.dt), _step, [S0,P0,0.0,key])
 		
 		sensory_genes, motor_genes, synaptic_genes, *_ = self.gene_splitter(S)
 		W = synaptic_genes @ self.O @ synaptic_genes.T
@@ -159,12 +163,19 @@ class GRNEncoding(BaseDevelopmentalModel):
 
 		return State(v=jnp.zeros(self.max_population),W=W, mask = mask, x=P, s=sensory_genes, m=motor_genes)
 
+
+#-------------------------------------------------------------------
+
+
 if __name__ == '__main__':
 	import matplotlib.pyplot as plt
-	mdl = GRNEncoding(1, 1, 4, 8, 0, key=jr.key(0))
+	import numpy as np
+	mdl = GRNEncoding(1, 1, 4, 8, 0, key=jr.key(np.random.randint(0,1000)))
 	net = mdl(jr.key(2))
 	x = net.x[net.mask]
 	plt.scatter(*x.T)
+	plt.xlim(-1,1.)
+	plt.ylim(-1., 1.)
 	plt.show()
 
 
