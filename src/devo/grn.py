@@ -22,6 +22,7 @@ M_dims = 4
 class GRN(eqx.Module):
 	Win: nn.Linear
 	Wex: nn.Linear
+	tau: Float
 	dt: float
 	has_autonomous_decay: bool
 	expression_bounds: tuple[float,float]
@@ -30,6 +31,7 @@ class GRN(eqx.Module):
 		kin, kex, kpos = jr.split(key, 3)
 		self.Win = nn.Linear(nb_genes, nb_genes, key=kin, use_bias=True)
 		self.Wex = nn.Linear(input_dims, nb_genes, key=kex, use_bias=True)
+		self.tau = jnp.ones(nb_genes)
 		self.dt = dt
 		self.has_autonomous_decay = has_autonomous_decay
 		self.expression_bounds = (expression_min, expression_max)
@@ -37,6 +39,7 @@ class GRN(eqx.Module):
 		ds_dt = jnn.tanh(self.Win(s) + self.Wex(x))
 		if self.has_autonomous_decay:
 			ds_dt = ds_dt - s
+		ds_dt = ds_dt / jnp.clip(self.tau, min=0.01)
 		return jnp.clip(s + self.dt * ds_dt, *self.expression_bounds)
 
 class SpatioemporalEncoder(eqx.Module):
@@ -103,7 +106,7 @@ class GRNEncoding(BaseDevelopmentalModel):
 			return sensory, motor, synaptic, migration, perturbation, regulatory
 		self.gene_splitter = _gene_splitter
 		
-		self.grn = GRN(nb_genes, nb_genes, expression_max=1.0, expression_min=-1.0, has_autonomous_decay=False, key=grn_key)
+		self.grn = GRN(nb_genes, nb_genes, expression_max=1.0, expression_min=-1.0, has_autonomous_decay=True, key=grn_key)
 		self.encoder = SpatioemporalEncoder(nb_genes, key=encoder_key)
 		self.O = jr.normal(conn_key, (nb_synaptic_genes,)*2)*0.1
 		self.gene_to_migration_prms = nn.Linear(migration_fields, migration_fields, use_bias=False, key=g2p_key)

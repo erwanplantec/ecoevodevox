@@ -21,8 +21,9 @@ from qdax.core.containers.mapelites_repertoire import MapElitesRepertoire, compu
 from qdax.core.containers.mels_repertoire import MELSRepertoire
 from qdax.utils.plotting import plot_2d_map_elites_repertoire
 
-from src.devo.ctrnn import CTRNN, CTRNNPolicyConfig
-from src.devo.model_e import Model_E, make_single_type, make_two_types, mutate, mask_prms, min_prms, max_prms
+from src.devo.policy_network.rnn import RNNPolicy
+from eco.interface import Interface
+from src.devo.model_e import Model_E, make_mutation_fn
 from src.utils.viz import render_network
 from src.evo.qd import GreedyMELSRepertoire, IlluminatePotentialRepertoire, MapElitesSamplesRepertoire
 
@@ -97,78 +98,76 @@ def train(cfg: Config):
 		[jnp.sin(laser_angles)[:,None],
 		 jnp.cos(laser_angles)[:,None]], axis=-1)
 
-	def sensor_expression(ctrnn: CTRNN):
-		assert ctrnn.s is not None
-		s = jnp.clip(ctrnn.s[:,0], -jnp.inf, jnp.inf) * ctrnn.mask
-		on_border = jnp.any(jnp.abs(ctrnn.x)>cfg.sensor_neurons_min_norm, axis=-1)
-		above_threshold = jnp.abs(s) > cfg.theta_sensor
-		s = jnp.where(on_border&above_threshold, s, 0.0)
-		return s
+	class KpxInterface(Interface):
 
-	def motor_expression(ctrnn: CTRNN):
-		assert ctrnn.m is not None
-		m = jnp.clip(ctrnn.m[:,0], -1., 1.) * ctrnn.mask
-		above_threshold = jnp.abs(m) > cfg.theta_motor
-		on_wheel = jnp.abs(ctrnn.x[:,0]) > cfg.motor_neurons_min_norm
-		m = jnp.where(on_wheel&above_threshold, m, 0.0)
-		return m
+		def sensor_expression(self, net):
+			assert net.s is not None
+			s = jnp.clip(net.s[:,0], -jnp.inf, jnp.inf) * net.mask
+			on_border = jnp.any(jnp.abs(net.x)>cfg.sensor_neurons_min_norm, axis=-1)
+			above_threshold = jnp.abs(s) > cfg.theta_sensor
+			s = jnp.where(on_border&above_threshold, s, 0.0); assert isinstance(s, jax.Array)
+			return s
 
-	def count_implicit_types(ctrnn):
-		msk = ctrnn.mask > 0.0
-		is_sensor = (jnp.abs(sensor_expression(ctrnn)) > 0.) & msk
-		is_motor = (jnp.abs(motor_expression(ctrnn)) > 0.) & msk
-		is_sensorimotor = is_sensor & is_motor
-		is_sensor_only = (~is_motor) & is_sensor
-		is_motor_only = (~is_sensor) & is_motor
-		is_inter = (~(is_sensor|is_motor)) & msk
-		return (is_sensor_only.sum(), is_motor_only.sum(), is_sensorimotor.sum(), is_inter.sum())
+		def motor_expression(self, net):
+			assert net.m is not None
+			m = jnp.clip(net.m[:,0], -1., 1.) * net.mask
+			above_threshold = jnp.abs(m) > cfg.theta_motor
+			on_wheel = jnp.abs(net.x[:,0]) > cfg.motor_neurons_min_norm
+			m = jnp.where(on_wheel&above_threshold, m, 0.0); assert isinstance(m, jax.Array)
+			return m
 
-	def encode_fn(obs: jax.Array, ctrnn: CTRNN):
-		# ---
-		assert ctrnn.s is not None
-		# ---
-		laser_values = obs[:cfg.lasers]
-		laser_values = 1.0 - (laser_values/cfg.laser_ranges)
-		xs = ctrnn.x
-		dists = jnp.linalg.norm(xs[:,None] - laser_positions, axis=-1)
-		closest = jnp.argmin(dists, axis=-1)
-		s = sensor_expression(ctrnn)
-		I =laser_values[closest]*s
-		return I
+		def count_implicit_types(self, net):
+			msk = net.mask > 0.0
+			is_sensor = (jnp.abs(self.sensor_expression(net)) > 0.) & msk
+			is_motor = (jnp.abs(self.motor_expression(net)) > 0.) & msk
+			is_sensorimotor = is_sensor & is_motor
+			is_sensor_only = (~is_motor) & is_sensor
+			is_motor_only = (~is_sensor) & is_motor
+			is_inter = (~(is_sensor|is_motor)) & msk
+			return (is_sensor_only.sum(), is_motor_only.sum(), is_sensorimotor.sum(), is_inter.sum())
 
-	def decode_fn(ctrnn: CTRNN):
-		# ---
-		assert ctrnn.m is not None
-		# ---
-		xs_x = ctrnn.x[:,0]
-		is_on_left_border = xs_x < 0
-		is_on_right_border = xs_x > 0
-		m = motor_expression(ctrnn)
-		on_left_motor = jnp.where(is_on_left_border, 
-							 	  jnp.clip(ctrnn.v*cfg.motor_neurons_force*m, -cfg.motor_neurons_force, cfg.motor_neurons_force), 
-								  0.0)
+		def encode(self, obs: jax.Array, net):
+			# ---
+			assert net.s is not None
+			# ---
+			laser_values = obs[:cfg.lasers]
+			laser_values = 1.0 - (laser_values/cfg.laser_ranges)
+			xs = net.x
+			dists = jnp.linalg.norm(xs[:,None] - laser_positions, axis=-1)
+			closest = jnp.argmin(dists, axis=-1)
+			s = self.sensor_expression(net)
+			I =laser_values[closest]*s
+			return I
 
-		on_right_motor = jnp.where(is_on_right_border, 
-							 	   jnp.clip(ctrnn.v*cfg.motor_neurons_force*m, -cfg.motor_neurons_force, cfg.motor_neurons_force), 
-								   0.0)
+		def decode(self, net):
+			# ---
+			assert net.m is not None
+			# ---
+			xs_x = net.x[:,0]
+			is_on_left_border = xs_x < 0
+			is_on_right_border = xs_x > 0
+			m = self.motor_expression(net)
+			on_left_motor = jnp.where(is_on_left_border, 
+								 	  jnp.clip(net.v*cfg.motor_neurons_force*m, -cfg.motor_neurons_force, cfg.motor_neurons_force), 
+									  0.0)
 
-		action = jnp.array([on_left_motor.sum(), on_right_motor.sum()])
+			on_right_motor = jnp.where(is_on_right_border, 
+								 	   jnp.clip(net.v*cfg.motor_neurons_force*m, -cfg.motor_neurons_force, cfg.motor_neurons_force), 
+									   0.0)
 
-		return action
+			action = jnp.array([on_left_motor.sum(), on_right_motor.sum()])
+
+			return action
 
 
-	policy_cfg = CTRNNPolicyConfig(encode_fn, decode_fn, dt=cfg.dt_ctrnn, T=cfg.T_ctrnn, 
-		activation_fn=activation_fns[cfg.act_ctrnn])
 	model = Model_E(cfg.max_types, cfg.synaptic_markers, cfg.max_nodes, 
 		sensory_dimensions=1, motor_dimensions=1, temperature_decay=0.98, 
 		extra_migration_fields=3, N_gain=cfg.N_gain, body_shape="square", 
-		policy_cfg=policy_cfg, connection_model=cfg.conn_model, key=key_mdl)
-	if cfg.start_cond=="sm":
-		model = make_single_type(model, cfg.N0)
-	elif cfg.start_cond=="t-m":
-		model = make_two_types(model, cfg.N0, cfg.N0)
+		connection_model=cfg.conn_model, key=key_mdl)
 	
-	prms, sttcs = model.partition()
+	model = RNNPolicy(model, KpxInterface())
+	
+	prms, sttcs = eqx.partition(model, eqx.is_array)
 	prms_shaper = ex.ParameterReshaper(prms, n_devices=1, verbose=False)
 	mdl_fctry = lambda prms: eqx.combine(prms, sttcs) 
 	
