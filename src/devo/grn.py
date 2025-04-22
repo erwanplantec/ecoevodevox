@@ -40,13 +40,14 @@ class GRN(eqx.Module):
 		return jnp.clip(s + self.dt * ds_dt, *self.expression_bounds)
 
 class SpatioemporalEncoder(eqx.Module):
-	encoder: nn.Linear
+	encoder: nn.MLP
 	def __init__(self, encoding_dims: int, *, key: jax.Array):
-		self.encoder = nn.Linear(M_dims+1, encoding_dims, key=key)
+		self.encoder = nn.MLP(M_dims+1, encoding_dims, 32, 1, 
+			final_activation=jnn.tanh, activation=jnn.tanh, key=key)
 	def __call__(self, p, t):
 		m = M(p)
 		inp = jnp.concatenate([m,t[None]])
-		output = jnn.sigmoid(self.encoder(inp))
+		output = self.encoder(inp)
 		return output
 
 class State(SERNN):
@@ -160,10 +161,9 @@ class GRNEncoding(BaseDevelopmentalModel):
 
 if __name__ == '__main__':
 	import matplotlib.pyplot as plt
-	mdl = GRNEncoding(1, 1, 4, 8, 0, key=jr.key(1))
+	mdl = GRNEncoding(1, 1, 4, 8, 0, key=jr.key(0))
 	net = mdl(jr.key(2))
 	x = net.x[net.mask]
-	print(x)
 	plt.scatter(*x.T)
 	plt.show()
 

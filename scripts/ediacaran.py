@@ -382,6 +382,7 @@ def simulate(cfg: Config):
 		masked_mean = lambda x, mask: masked_sum(x,mask) / (jnp.sum(mask)+1e-8) #type:ignore
 		# ---
 		actions = step_data["actions"]
+		actions_norm = jnp.linalg.norm(actions, axis=-1)
 		alive = state.agents.alive
 		have_moved = ~jnp.all(actions == jnp.zeros(2, dtype=actions.dtype)[None], axis=-1)
 		reproduction_rates = jnp.where(
@@ -453,7 +454,7 @@ def simulate(cfg: Config):
 			"reproduction_rates": reproduction_rates,
 			# --- ACTIONS
 			"actions": actions,
-			"actions_norm": jnp.linalg.norm(actions, axis=-1),
+			"actions_norm": actions_norm,
 			"moving": have_moved,
 			"move_up_count": state.agents.move_up_count,
 			"move_down_count": state.agents.move_down_count,
@@ -461,6 +462,7 @@ def simulate(cfg: Config):
 			"move_left_count": state.agents.move_left_count,
 			"nb_reproductions": jnp.sum(step_data["reproducing"]),
 			"energy_intakes": step_data["energy_intakes"],
+			"bhvr_efficiency": step_data["energy_intakes"]/actions_norm,
 			**{key: step_data[key] for key in step_data.keys() if key.startswith("energy_loss")},
 			# --- OBS
 			"obs_C": observations.chemicals,
