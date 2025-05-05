@@ -1,0 +1,98 @@
+from flax.struct import PyTreeNode
+import jax
+from jax import numpy as jnp, random as jr, nn as jnn
+import equinox as eqx
+import equinox.nn as nn
+from flax import struct
+from jaxtyping import Float
+
+from .base import MotorInterface, Action, Position, PolicyState, MotorState, Info
+
+
+class BraitenbergMotorState(struct.PyTreeNode):
+	on_right_motor: jax.Array
+	on_left_motor: jax.Array
+
+class BraitenbergMotorInterface(MotorInterface):
+	#-------------------------------------------------------------------
+	radius: float
+	dt: float=0.1
+	max_distance_to_motor: float=0.2 
+	max_speed: float=1.0
+	wheel_speed_gain: float=0.1
+	motor_energy_cost: float=0.1
+	#-------------------------------------------------------------------
+
+	def init(self, policy_state: PolicyState, key: jax.Array) -> BraitenbergMotorState:
+		# ---
+		assert hasattr(policy_state, "x") #make sure network is spatially embedded
+		# ---
+		xs = policy_state.x
+		left_motor_pos = jnp.array([-1.0, 0.0])
+		right_motor_pos = jnp.array([1.0, 0.0])
+
+		dist_to_left_motor = jnp.linalg.norm(xs-left_motor_pos[None], axis=-1)
+		on_left_motor = dist_to_left_motor < self.max_distance_to_motor
+
+		dist_to_right_motor = jnp.linalg.norm(xs-right_motor_pos[None], axis=-1)
+		on_right_motor = dist_to_right_motor < self.max_distance_to_motor
+
+		return BraitenbergMotorState(on_right_motor, on_left_motor)
+
+	#-------------------------------------------------------------------
+
+	def decode(self, policy_state: PolicyState, motor_state: BraitenbergMotorState) -> tuple[Action, Float, MotorState, Info]:
+		
+		left_motor_activations = jnp.where(motor_state.on_left_motor, policy_state.v, 0.0); assert isinstance(left_motor_activations, jax.Array)
+		left_motor_activation = left_motor_activations.sum()
+
+		right_motor_activations = jnp.where(motor_state.on_right_motor, policy_state.v, 0.0); assert isinstance(right_motor_activations, jax.Array)
+		right_motor_activation = right_motor_activations.sum()
+
+		left_wheel_speed = jnp.clip(left_motor_activation*self.wheel_speed_gain, -self.max_speed, self.max_speed)
+		right_wheel_speed = jnp.clip(right_motor_activation*self.wheel_speed_gain, -self.max_speed, self.max_speed)
+
+		action = jnp.array([left_wheel_speed, right_wheel_speed], dtype=jnp.float16)
+		action_norm = jnp.linalg.norm(action)
+
+		energy_loss = action_norm * self.motor_energy_cost
+
+		return action, energy_loss, motor_state, {"action_norm": action_norm}
+
+	#-------------------------------------------------------------------
+	
+	def move(self, action: Action, position: Position) -> Position:
+		
+		def _if_not_equal(pos, heading, vr, vl):
+			l = self.radius*2
+			r = self.radius * (vl+vr) / (vr-vl)
+			icc = pos + jnp.array([-r*jnp.sin(heading),r*jnp.cos(heading)], dtype=jnp.float16)
+			omega = (vr-vl)/l
+			omega = omega*self.dt
+			rotation_matrix = jnp.array([[jnp.cos(omega), -jnp.sin(omega)],
+										 [jnp.sin(omega),  jnp.cos(omega)]], dtype=jnp.float16)
+			pos = rotation_matrix @ (pos-icc) + icc
+			heading = heading + omega
+			return Position(pos, heading)
+
+		def _if_equal(pos, heading, vr, vl):
+			pos = pos + vr*jnp.array([jnp.cos(heading), jnp.sin(heading)], dtype=jnp.float16)
+			return Position(pos, heading)
+
+		pos, heading = position.pos, position.heading
+		vl, vr = action
+
+		pos = jax.lax.cond(jnp.abs(vr-vl)<1e-8, _if_equal, _if_not_equal, pos, heading, vr, vl)
+
+		return pos
+
+	#-------------------------------------------------------------------
+
+
+if __name__ == '__main__':
+	
+	interface = BraitenbergMotorInterface(1.0, 0.1)
+	action = jnp.array([1.0,-1.0])
+	position = Position(jnp.zeros(2), jnp.array(jnp.pi))
+	new_pos = interface.move(action, position)
+	print(new_pos)

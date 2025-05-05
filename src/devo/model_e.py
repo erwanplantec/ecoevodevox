@@ -1,9 +1,8 @@
-from chex import ArrayTree
 from jax.flatten_util import ravel_pytree
 
 from .base import BaseDevelopmentalModel
-from .policy_network.rnn import SERNN
-from .policy_network.ctrnn import SECTRNN
+from ..nn.rnn import SERNN
+from ..nn.ctrnn import SECTRNN
 
 import jax
 import jax.numpy as jnp

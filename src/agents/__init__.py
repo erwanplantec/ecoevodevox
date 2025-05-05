@@ -1,0 +1,3 @@
+from .interface import AgentInterface, CiliasMotorInterface
+from .motor.braitenberg import BraitenbergMotorInterface
+from .sensory.spatially_embedded import SpatiallyEmbeddedSensoryInterface

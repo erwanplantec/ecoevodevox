@@ -16,7 +16,8 @@ import numpy as np
 from src.eco.interface import SpatiallyEmbeddedNetworkInterface
 from src.devo.policy_network.rnn import RNNPolicy
 from src.devo.policy_network.ctrnn import CTRNNPolicy
-from src.eco.gridworld import (Agent, GridWorld,
+from src.eco.gridworld import (GridWorld,
+							   AgentState,
 							   EnvState,
 							   FoodType,
 							   ChemicalType,
@@ -177,13 +178,13 @@ def make_agents_model(cfg: Config):
 	if cfg.policy_mdl=="rnn":
 		def _rnn_mdl_factory(key):
 			encoding_mdl = encoding_model_factory(key)
-			mdl = RNNPolicy(encoding_mdl, interface)
+			mdl = RNNPolicy(encoding_mdl)
 			return mdl
 		model_factory = _rnn_mdl_factory
 	elif  cfg.policy_mdl=="ctrnn":
 		def _ctrnn_mdl_factory(key):
 			encoding_mdl = encoding_model_factory(key)
-			mdl = CTRNNPolicy(encoding_mdl, interface, cfg.dt_ctrnn, cfg.T_ctrnn)
+			mdl = CTRNNPolicy(encoding_mdl, cfg.dt_ctrnn, cfg.T_ctrnn)
 			return mdl
 		model_factory = _ctrnn_mdl_factory
 	else:
@@ -234,7 +235,6 @@ def simulate(cfg: Config):
 	#-------------------------------------------------------------------
 
 	dummy_model, agent_init, agent_apply = make_agents_model(cfg)
-	interface = dummy_model.interface
 	dummy_prms = eqx.filter(dummy_model, eqx.is_array)
 	flat_prms_like, prms_shaper = ravel_pytree(dummy_prms)
 	
@@ -279,12 +279,11 @@ def simulate(cfg: Config):
 
 	if cfg.interface=="se":
 
-		def _state_energy_cost_fn(state: Agent):
+		def _state_energy_cost_fn(state: AgentState):
 			"""computes state energy cost"""
 			net: TypeBasedSECTRNN = state.policy_state
 			# ---
 			assert net.mask is not None
-			assert isinstance(interface, SpatiallyEmbeddedNetworkInterface)
 			# ---
 			nb_neurons = net.mask.sum()
 			s_expressed = jnp.abs(interface.sensory_expression(net))
@@ -332,10 +331,7 @@ def simulate(cfg: Config):
 	world = GridWorld(
 		size=cfg.size,
 		# ---
-		max_agents=cfg.max_agents,
-		agent_fctry=agent_prms_fctry,
-		agent_apply=agent_apply,
-		agent_init=agent_init,
+		agent_interface=agent_interface,
 		init_agents=cfg.initial_agents,
 		# ---
 		agents_scale=cfg.body_scale,
@@ -356,7 +352,6 @@ def simulate(cfg: Config):
 		food_types=food_types,
 		# ---
 		walls_density=cfg.wall_density,
-		deadly_walls=cfg.deadly_walls,
 		# ---
 		key=key_wrld
 	)

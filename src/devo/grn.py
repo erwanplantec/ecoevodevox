@@ -1,5 +1,6 @@
 from typing import Callable
 import jax
+from jax.flatten_util import ravel_pytree
 import jax.numpy as jnp
 import jax.random as jr
 import jax.nn as jnn
@@ -7,7 +8,7 @@ import equinox as eqx
 import equinox.nn as nn
 from jaxtyping import Float, PyTree
 
-from .policy_network.rnn import SERNN
+from ..nn.rnn import SERNN
 
 from .base import BaseDevelopmentalModel
 from .model_e import XOXT
@@ -68,43 +69,37 @@ class GRNEncoding(BaseDevelopmentalModel):
 	population_gain: float
 	T: float
 	dt: float
-	max_population: int
-	gene_splitter: Callable
+	max_neurons: int
+	genome_shaper: Callable
 	extra_migration_fields: int
 	# ---
 	def __init__(
 		self, 
-		nb_sensory_genes: int, nb_motor_genes: int, 
-		nb_synaptic_genes: int=4, nb_regulatory_genes: int=0,  
+		nb_sensory_genes: int, 
+		nb_motor_genes: int, 
+		nb_synaptic_genes: int=4, 
+		nb_regulatory_genes: int=0,  
 		extra_migration_fields: int=0,
-		dt: float=0.03, T: float=10.0, 
-		population_gain: float=10., max_population: int=128,  
+		dt: float=0.03, 
+		T: float=10.0, 
+		population_gain: float=10., 
+		max_neurons: int=128,  
 		*, key: jax.Array):
 
 		grn_key, encoder_key, conn_key, g2p_key = jr.split(key, 4)
 
 		migration_fields = M_dims + extra_migration_fields
-		nb_genes = (
-			nb_sensory_genes 
-			+ nb_motor_genes 
-			+ nb_synaptic_genes 
-			+ nb_regulatory_genes 
-			+ 2 * migration_fields) #chemotaxis + perturbations
-
-		def _gene_splitter(s):
-			sensory = s[...,:nb_sensory_genes]
-			i = nb_sensory_genes
-			motor = s[...,i:i+nb_motor_genes]
-			i = i+nb_motor_genes
-			synaptic = s[...,i:i+nb_synaptic_genes]
-			i = i+nb_synaptic_genes
-			migration = s[...,i:i+migration_fields+1]
-			i = i+migration_fields+1
-			perturbation = s[...,i:i+migration_fields]
-			i = i+migration_fields
-			regulatory = s[...,i:]
-			return sensory, motor, synaptic, migration, perturbation, regulatory
-		self.gene_splitter = _gene_splitter
+		genes_compartments = [
+			jnp.zeros(nb_sensory_genes),
+			jnp.zeros(nb_motor_genes),
+			jnp.zeros(nb_synaptic_genes),
+			jnp.zeros(migration_fields+1),
+			jnp.zeros(migration_fields),
+			jnp.zeros(nb_regulatory_genes)
+		]
+		flat_genes, genome_shaper = ravel_pytree(genes_compartments)
+		nb_genes = len(flat_genes)
+		self.genome_shaper = genome_shaper
 		
 		self.grn = GRN(nb_genes, nb_genes, expression_max=1.0, expression_min=-1.0, has_autonomous_decay=True, key=grn_key)
 		self.encoder = SpatioemporalEncoder(nb_genes, key=encoder_key)
@@ -116,13 +111,13 @@ class GRNEncoding(BaseDevelopmentalModel):
 		self.dt=dt
 		self.T = T
 		self.population_gain = population_gain
-		self.max_population = max_population
+		self.max_neurons = max_neurons
 		self.extra_migration_fields = extra_migration_fields
 
 	# ---
 	def __call__(self, key: jax.Array) -> State:
 
-		mask = jnp.arange(self.max_population) < (self.population*self.population_gain)
+		mask = jnp.arange(self.max_neurons) < (self.population*self.population_gain)
 		
 		def _step(_, state):
     
@@ -131,7 +126,7 @@ class GRNEncoding(BaseDevelopmentalModel):
 
 			X = jax.vmap(self.encoder, in_axes=(0,None))(P, t)
 			S = jax.vmap(self.grn)(S, X)
-			_, _, _, migration_genes, perturbation_genes, _ = self.gene_splitter(S)
+			_, _, _, migration_genes, perturbation_genes, _ = jax.vmap(self.genome_shaper)(S)
 
 			def M_(p):
 				dists = jnp.sum(jnp.square(p[None]-P), axis=-1, keepdims=True)
@@ -155,16 +150,16 @@ class GRNEncoding(BaseDevelopmentalModel):
 
 		P0_key, dev_key = jr.split(key, 2)
 
-		S0 = jnp.zeros((self.max_population, self.nb_genes))
-		P0 = jr.uniform(P0_key, (self.max_population, 2), minval=-0.1, maxval=0.1)
+		S0 = jnp.zeros((self.max_neurons, self.nb_genes))
+		P0 = jr.uniform(P0_key, (self.max_neurons, 2), minval=-0.1, maxval=0.1)
 
-		S,P, *_ = jax.lax.fori_loop(0, int(self.T//self.dt), _step, [S0,P0,0.0,key])
+		S,P, *_ = jax.lax.fori_loop(0, int(self.T//self.dt), _step, [S0,P0,0.0,dev_key])
 		
-		sensory_genes, motor_genes, synaptic_genes, *_ = self.gene_splitter(S)
+		sensory_genes, motor_genes, synaptic_genes, *_ = jax.vmap(self.genome_shaper)(S)
 		W = synaptic_genes @ self.O @ synaptic_genes.T
 		W = W * (mask[None]*mask[:,None])
 
-		return State(v=jnp.zeros(self.max_population),W=W, mask = mask, x=P, s=sensory_genes, m=motor_genes)
+		return State(v=jnp.zeros(self.max_neurons),W=W, mask = mask, x=P, s=sensory_genes, m=motor_genes)
 
 
 #-------------------------------------------------------------------

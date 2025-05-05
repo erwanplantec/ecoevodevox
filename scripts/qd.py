@@ -21,6 +21,7 @@ from qdax.core.containers.mapelites_repertoire import MapElitesRepertoire, compu
 from qdax.core.containers.mels_repertoire import MELSRepertoire
 from qdax.utils.plotting import plot_2d_map_elites_repertoire
 
+from devo.grn import GRNEncoding
 from src.devo.policy_network.rnn import RNNPolicy
 from eco.interface import Interface
 from src.devo.model_e import Model_E, make_mutation_fn
@@ -56,12 +57,12 @@ class Config(NamedTuple):
 	motor_neurons_force: float=0.1
 	theta_sensor: float=0.1
 	theta_motor: float=0.1
-	# --- model ---
+	# --- model-e prms ---
 	max_types: int=8
 	max_nodes: int=128
 	synaptic_markers: int=8
 	N_gain: float=100.0
-	conn_model: str="mlp"
+	conn_model: str="xoxt"
 	T_ctrnn: float=0.1
 	dt_ctrnn: float=0.03
 	act_ctrnn: str="tanh"
@@ -165,30 +166,12 @@ def train(cfg: Config):
 		extra_migration_fields=3, N_gain=cfg.N_gain, body_shape="square", 
 		connection_model=cfg.conn_model, key=key_mdl)
 	
-	model = RNNPolicy(model, KpxInterface())
+	interface = KpxInterface()
+	model = RNNPolicy(model, interface)
 	
 	prms, sttcs = eqx.partition(model, eqx.is_array)
 	prms_shaper = ex.ParameterReshaper(prms, n_devices=1, verbose=False)
 	mdl_fctry = lambda prms: eqx.combine(prms, sttcs) 
-	
-	prms_min, _ = ravel_pytree(min_prms(prms)) 
-	prms_max, _ = ravel_pytree(max_prms(prms))
-	prms_mask, _ = ravel_pytree(mask_prms(prms))
-
-	_mutation_fn = partial(
-		mutate, 
-		p_duplicate=cfg.p_duplicate, 
-		p_mut=cfg.p_mut, 
-		p_rm=cfg.p_rm, 
-		p_add=cfg.p_add, 
-		sigma_mut=cfg.sigma_mut,
-		shaper=prms_shaper,
-		split_pop_duplicate=cfg.split_pop
-	)
-	def mutation_fn(x_batch, key):
-		new_key, key = jr.split(key)
-		keys = jr.split(key, x_batch.shape[0])
-		return jax.vmap(_mutation_fn)(x_batch, keys), new_key
 
 	_isoline_variation = partial(
 		isoline_variation,
@@ -240,8 +223,8 @@ def train(cfg: Config):
 		D = jnp.linalg.norm(xs[None]-xs[:,None], axis=-1)
 		connections = (jnp.abs(policy_state.W) * D).sum()
 		nb_neurons = policy_state.mask.sum()
-		sensors = jnp.sum(jnp.abs(sensor_expression(policy_state) * policy_state.mask))
-		motors = jnp.sum(jnp.abs(motor_expression(policy_state) * policy_state.mask))
+		sensors = jnp.sum(jnp.abs(interface.sensor_expression(policy_state) * policy_state.mask))
+		motors = jnp.sum(jnp.abs(interface.motor_expression(policy_state) * policy_state.mask))
 
 		connections_penalty = connections * cfg.connection_cost
 		neurons_penalty = nb_neurons * cfg.neuron_cost
@@ -281,11 +264,11 @@ def train(cfg: Config):
 		# --- count implicit typees ---
 		ctrnns = data["eval_data"]["final_state"].policy_state #P[,E],N,...
 		if cfg.algo in ("mels", "ip", "greedy-mels", "mes"):
-			implicit_types_count = jax.vmap(jax.vmap(count_implicit_types, in_axes=0),in_axes=0)(ctrnns)
+			implicit_types_count = jax.vmap(jax.vmap(interface.count_implicit_types, in_axes=0),in_axes=0)(ctrnns)
 			implicit_types_count = jax.tree.map(lambda x: x.mean(1), implicit_types_count)
 			nb_sensors, nb_motors, nb_sensorimotors, nb_inters = implicit_types_count
 		else:
-			implicit_types_count = jax.vmap(count_implicit_types, in_axes=0)(ctrnns)
+			implicit_types_count = jax.vmap(interface.count_implicit_types, in_axes=0)(ctrnns)
 			nb_sensors, nb_motors, nb_sensorimotors, nb_inters = implicit_types_count
 		have_inters = (nb_inters > 0).sum() #nb of individuals expressing implicit interneurons
 		# ---
