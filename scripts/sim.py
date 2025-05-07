@@ -81,7 +81,8 @@ def init_agents_interface(cfg: dict, key: jax.Array):
 							   sensory_interface=sensory_interface,
 							   motor_interface=motor_interface,
 							   size=cfg["agents"]["size"],
-							   body_resolution=cfg["agents"]["body_resolution"])
+							   body_resolution=cfg["agents"]["body_resolution"],
+							   basal_energy_loss=cfg["agents"]["basal_energy_loss"])
 
 	return interface, mutation_fn
 
