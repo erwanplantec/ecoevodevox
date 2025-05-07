@@ -74,7 +74,7 @@ def make_chemical_diffusion_convolution(env_size: tuple[int,int],
 	# ---
 	mH, mW = H//2, W//2
 	L = jnp.mgrid[-mH:mH,-mW:mW]
-	D = jnp.linalg.norm(L, axis=0, keepdims=True) #1,H,W
+	D = jnp.sum(jnp.square(L), axis=0, keepdims=True) #1,H,W
 
 	diffusion_kernels = jnp.exp(-D/diffusion_rates[:,None,None]); assert isinstance(diffusion_kernels, jax.Array)
 	diffusion_kernels_fft = jnp.fft.fft2(jnp.fft.fftshift(diffusion_kernels, axes=(1,2)))
