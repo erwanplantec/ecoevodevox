@@ -19,6 +19,7 @@ class AgentInterface(eqx.Module):
 	_sensory_interface: SensoryInterface
 	_motor_interface: MotorInterface
 	_full_body_pos: Callable
+	basal_energy_loss: Float16
 	#-------------------------------------------------------------------
 	def __init__(self,
 				 policy_apply: Callable[[PolicyParams,PolicyInput,PolicyState,jax.Array],PolicyState],
@@ -27,7 +28,8 @@ class AgentInterface(eqx.Module):
 				 sensory_interface: SensoryInterface,
 				 motor_interface: MotorInterface,
 				 size: float=3.0,
-				 body_resolution: int|None=None):
+				 body_resolution: int|None=None,
+				 basal_energy_loss: float=0.0):
 		# ---
 		self._policy_apply = policy_apply
 		self._policy_init = policy_init
@@ -49,6 +51,7 @@ class AgentInterface(eqx.Module):
 			rotated_deltas = jnp.matmul(rotation_matrix, deltas_single_batch_dim).reshape(2,*deltas.shape[1:])
 			return pos[:,None,None]+rotated_deltas
 		self._full_body_pos = _get_body_points
+		self.basal_energy_loss = jnp.asarray(basal_energy_loss, dtype=jnp.float16)
 	#-------------------------------------------------------------------
 	def step(self, obs: Observation, state: AgentState, key: jax.Array)->Tuple[Action,AgentState,dict]:
 		"""Make 1 update step of agent:
@@ -58,7 +61,7 @@ class AgentInterface(eqx.Module):
 		policy_state, policy_energy_loss = self.policy_apply(state.policy_params, policy_input, state.policy_state, key)
 		action, energy_loss, motor_state, motor_info = self.decode_policy(policy_state, state.motor_state)
 		
-		energy = state.energy - energy_loss
+		energy = state.energy - energy_loss - self.basal_energy_loss
 		is_above_threshold = energy > 0.0
 
 		state = state.replace(
