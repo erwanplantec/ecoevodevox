@@ -139,7 +139,7 @@ def metrics_fn(state: EnvState, step_data: dict)->dict:
 		"population": agents.alive.sum(),
 		"energy_levels": agents.energy,
 		"offsprings": agents.n_offsprings,
-		"actions_norm": step_data["action_norm"],
+		**step_data,
 		"ages": agents.age,
 		**food_levels,
 		"total_food": state.food.sum(),
