@@ -383,7 +383,10 @@ class GridWorld:
 			return agents
 		# ---	
 
-		reproducing = agents.alive & (agents.time_above_threshold > self.cfg.time_above_threshold_to_reproduce)
+		reproducing = agents.alive \
+				    & (agents.time_above_threshold > self.cfg.time_above_threshold_to_reproduce) \
+				    & jnp.any(~agents.alive)
+
 
 		agents = jax.lax.cond(
 			jnp.any(reproducing)&jnp.any(~agents.alive),
@@ -428,6 +431,11 @@ class GridWorld:
 		return Observation(chemicals=agents_chemicals_inputs, internal=agents_internal_inputs, walls=agents_walls_inputs)
 
 	#-------------------------------------------------------------------
+
+	def _normalize_position(self, position: Position):
+		pos = jnp.mod(position.pos, jnp.array(self.cfg.size))
+		heading = jnp.mod(position.heading, 2*jnp.pi)
+		return Position(pos, heading)
 
 	def _apply_actions(self, state: EnvState, actions: jax.Array)->Tuple[EnvState, dict]:
 		"""

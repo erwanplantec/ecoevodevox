@@ -199,7 +199,7 @@ class Simulator:
 		if ckpt_dir:
 			os.makedirs(ckpt_dir, exist_ok=True)
 
-
+		@jax.jit
 		def _simulation_step(state: EnvState, key: jax.Array)->EnvState:
 			# ---
 			key, key_step = jr.split(key)
