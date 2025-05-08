@@ -140,6 +140,7 @@ def metrics_fn(state: EnvState, step_data: dict)->dict:
 		"energy_levels": agents.energy,
 		"offsprings": agents.n_offsprings,
 		"energy_intakes": step_data["energy_intakes"],
+		"actions_norm": step_data["action_norm"],
 		"ages": agents.age,
 		**food_levels,
 		"total_food": state.food.sum(),
@@ -156,7 +157,7 @@ def host_log_transform(data: dict)->dict:
 			continue
 		if v.shape[0]==mask.shape[0]:
 			data[k] = v[mask]
-			avg_data[f"{k} (avg)"] = data[k]
+			avg_data[f"{k} (avg)"] = np.mean(data[k])
 	data["reproduction_rates"] = data["offsprings"] / data["ages"]
 	del data["alive"] 
 	data = {**data, **avg_data}
@@ -329,6 +330,7 @@ def main():
 		world = simulator.world
 		state = world.init(jr.key(1))
 		state, _ = world.step(state, jr.key(0))
+		state, _ = world.step(state, jr.key(1))
 		plt.scatter(*state.agents_states.position.pos.T); plt.show()
 
 	else:

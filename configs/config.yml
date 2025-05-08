@@ -78,7 +78,7 @@ ft-1:
   chemical_signature: 0
   energy_concentration: 1.0
   spontaneous_grow_prob: 0.0
-  initial_density: 0.001
+  initial_density: 1.0
 
 ft-2:
   growth_rate: 0.01
@@ -87,7 +87,7 @@ ft-2:
   chemical_signature: 1
   energy_concentration: 1.0
   spontaneous_grow_prob: 0.0
-  initial_density: 0.001
+  initial_density: 1.0
 
 
 
