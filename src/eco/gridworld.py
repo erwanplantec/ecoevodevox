@@ -445,6 +445,7 @@ class GridWorld:
 		# --- 1. Move ---
 
 		new_positions = jax.vmap(self.agent_interface.move)(actions, agents.position)
+		new_positions = self._normalize_position(new_positions)
 		hits_wall = jax.vmap(lambda p: jnp.any(self.walls[*get_cell_index(self.agent_interface.full_body_pos(p))]))(new_positions)
 		hits_wall = hits_wall & agents.alive
 		if self.cfg.wall_effect=="kill":

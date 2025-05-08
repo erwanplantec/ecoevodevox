@@ -84,7 +84,7 @@ class BraitenbergMotorInterface(MotorInterface):
 		vl, vr = action
 		is_equal = jnp.abs(vr-vl)<1e-5
 		pos = jax.lax.cond(is_equal, _if_equal, _if_not_equal, pos, heading, vr, vl)
-		return pos
+		return pos.replace(heading=jnp.mod(pos.heading, 2*jnp.pi))
 
 	#-------------------------------------------------------------------
 
