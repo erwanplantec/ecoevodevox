@@ -508,7 +508,7 @@ class GridWorld:
 		food = state.food
 		# --- Grow ---
 		p_grow = self.growth_conv(food); assert isinstance(p_grow, jax.Array)
-		p_grow = jnp.where(jnp.any(food, axis=0, keepdims=True), 0.0, p_grow)
+		p_grow = p_grow + self.food_types.spontaneous_grow_prob[:,None,None]
 		grow = jr.bernoulli(key, p_grow)
 
 		grow = jnp.where(

@@ -16,7 +16,7 @@ class BraitenbergMotorState(struct.PyTreeNode):
 class BraitenbergMotorInterface(MotorInterface):
 	#-------------------------------------------------------------------
 	radius: float
-	dt: float=0.1
+	dt: float=1.0
 	max_distance_to_motor: float=0.2 
 	max_speed: float=1.0
 	wheel_speed_gain: float=0.1
