@@ -208,9 +208,7 @@ class GridWorld:
 
 		return (
 			state, 
-			dict(state=state, 
-				 actions=actions, 
-				 observations=observations,
+			dict(actions=actions, 
 				 **agents_step_data,
 				 **actions_data, 
 				 **update_agents_data)
