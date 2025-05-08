@@ -62,15 +62,12 @@ class AgentInterface(eqx.Module):
 		action, energy_loss, motor_state, motor_info = self.decode_policy(policy_state, state.motor_state)
 		
 		energy = state.energy - energy_loss - self.basal_energy_loss
-		is_above_threshold = energy > 0.0
 
 		state = state.replace(
 			policy_state=policy_state, 
 			motor_state=motor_state, 
 			sensory_state=sensory_state, 
 			energy=energy,
-			time_above_threshold=(state.time_above_threshold+1) * is_above_threshold,
-			time_below_threshold=(state.time_below_threshold+1) * ~is_above_threshold,
 			age=state.age+1  
 		)
 
