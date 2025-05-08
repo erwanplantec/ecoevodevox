@@ -20,6 +20,7 @@ class AgentInterface(eqx.Module):
 	_motor_interface: MotorInterface
 	_full_body_pos: Callable
 	basal_energy_loss: Float16
+	size: Float
 	#-------------------------------------------------------------------
 	def __init__(self,
 				 policy_apply: Callable[[PolicyParams,PolicyInput,PolicyState,jax.Array],PolicyState],
@@ -36,6 +37,8 @@ class AgentInterface(eqx.Module):
 		self._policy_fctry = policy_fctry
 		self._sensory_interface = sensory_interface
 		self._motor_interface = motor_interface
+		self.size = jnp.asarray(size)
+		self.basal_energy_loss = jnp.asarray(basal_energy_loss, dtype=jnp.float16)
 		# ---
 		resolution = int(jnp.ceil(size+1)) if body_resolution is None else body_resolution
 		deltas = jnp.stack(
@@ -51,7 +54,6 @@ class AgentInterface(eqx.Module):
 			rotated_deltas = jnp.matmul(rotation_matrix, deltas_single_batch_dim).reshape(2,*deltas.shape[1:])
 			return pos[:,None,None]+rotated_deltas
 		self._full_body_pos = _get_body_points
-		self.basal_energy_loss = jnp.asarray(basal_energy_loss, dtype=jnp.float16)
 	#-------------------------------------------------------------------
 	def step(self, obs: Observation, state: AgentState, key: jax.Array)->Tuple[Action,AgentState,dict]:
 		"""Make 1 update step of agent:

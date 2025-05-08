@@ -314,7 +314,7 @@ class GridWorld:
 			parents_heading = agents.position.heading[parents_buffer_id]
 			direction = -parents_heading
 			delta = jnp.stack([jnp.cos(direction), jnp.sin(parents_heading)], axis=-1)
-			childs_positions = agents.position.pos[parents_buffer_id] + delta
+			childs_positions = agents.position.pos[parents_buffer_id] + delta*2.0*self.agent_interface.size
 			childs_headings = jr.uniform(key_head, minval=0.0, maxval=2*jnp.pi, dtype=f16)
 			childs_positions = Position(childs_positions, childs_headings)
 
