@@ -53,7 +53,6 @@ class AgentInterface(eqx.Module):
 		self._full_body_pos = _get_body_points
 		self.basal_energy_loss = jnp.asarray(basal_energy_loss, dtype=jnp.float16)
 	#-------------------------------------------------------------------
-	@partial(jax.jit, static_argnames=("self",))
 	def step(self, obs: Observation, state: AgentState, key: jax.Array)->Tuple[Action,AgentState,dict]:
 		"""Make 1 update step of agent:
 			encode -> policy update -> decode
