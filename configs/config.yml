@@ -2,7 +2,7 @@ seed: 0
 log: true
 ckpt_dir: 
 ckpt_freq: 1_000
-project: "eedx"
+project: "eedx_debug"
 run_name: ""
 
 
@@ -29,6 +29,7 @@ agents:
 
   size: 3.0
   body_resolution:
+  basal_energy_loss: 0.1
 
   motor:
     which: "braitenberg"
