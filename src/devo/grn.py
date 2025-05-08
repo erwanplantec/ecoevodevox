@@ -84,6 +84,7 @@ class GRNEncoding(BaseDevelopmentalModel):
 		T: float=10.0, 
 		population_gain: float=10., 
 		max_neurons: int=128,  
+		nb_init_neurons: int=8,
 		*, key: jax.Array):
 
 		grn_key, encoder_key, conn_key, g2p_key = jr.split(key, 4)
@@ -105,7 +106,7 @@ class GRNEncoding(BaseDevelopmentalModel):
 		self.encoder = SpatioemporalEncoder(nb_genes, key=encoder_key)
 		self.O = jr.normal(conn_key, (nb_synaptic_genes,)*2)*0.1
 		self.gene_to_migration_prms = nn.Linear(migration_fields, migration_fields, use_bias=False, key=g2p_key)
-		self.population = jnp.ones(())* (8.0 / population_gain) 
+		self.population = jnp.ones(())* (nb_init_neurons / population_gain) 
 
 		self.nb_genes = nb_genes
 		self.dt=dt

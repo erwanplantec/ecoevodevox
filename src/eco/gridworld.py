@@ -311,9 +311,11 @@ class GridWorld:
 			
 			childs_energy = jnp.full(self.cfg.birth_pool_size, self.cfg.initial_energy, dtype=f16)
 
-			childs_positions = agents.position.pos[parents_buffer_id] + jr.uniform(key_pos, minval=-1.0, maxval=1.0, dtype=f16)
-			childs_headings = agents.position.heading[parents_buffer_id] + jr.uniform(key_head, minval=-1.0, maxval=1.0, dtype=f16)
-			childs_headings = jnp.mod(childs_headings, 2*jnp.pi)
+			parents_heading = agents.position.heading[parents_buffer_id]
+			direction = -parents_heading
+			delta = jnp.stack([jnp.cos(direction), jnp.sin(parents_heading)], axis=-1)
+			childs_positions = agents.position.pos[parents_buffer_id] + delta
+			childs_headings = jr.uniform(key_head, minval=0.0, maxval=2*jnp.pi, dtype=f16)
 			childs_positions = Position(childs_positions, childs_headings)
 
 			agents_alive = agents.alive.at[childs_buffer_id].set(childs_alive) #make sur to not overwrite occupied buffer ids (if more reproducers than free buffer spots)
