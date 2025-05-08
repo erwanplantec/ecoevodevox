@@ -5,6 +5,7 @@ import equinox as eqx
 import equinox.nn as nn
 from flax import struct
 from jaxtyping import Float
+import numpy as np
 
 from .base import MotorInterface, Action, Position, PolicyState, MotorState, Info
 
@@ -81,9 +82,8 @@ class BraitenbergMotorInterface(MotorInterface):
 
 		pos, heading = position.pos, position.heading
 		vl, vr = action
-
-		pos = jax.lax.cond(jnp.abs(vr-vl)<1e-8, _if_equal, _if_not_equal, pos, heading, vr, vl)
-
+		is_equal = jnp.abs(vr-vl)<1e-5
+		pos = jax.lax.cond(is_equal, _if_equal, _if_not_equal, pos, heading, vr, vl)
 		return pos
 
 	#-------------------------------------------------------------------

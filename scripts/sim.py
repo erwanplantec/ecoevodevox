@@ -321,16 +321,25 @@ def main():
 	""""""
 	parser = argparse.ArgumentParser()
 	parser.add_argument("filename", type=str)
+	parser.add_argument("--debug", type=int, default=0)
 	args = parser.parse_args()
 	simulator, cfg = Simulator.from_config_file(args.filename)
 
-	if cfg["log"]: 
-		wandb.init(project=cfg["project"], config=cfg)
+	if args.debug:
+		world = simulator.world
+		state = world.init(jr.key(1))
+		state, _ = world.step(state, jr.key(0))
+		plt.scatter(*state.agents_states.position.pos.T); plt.show()
 
-	simulator.run_interactive()
+	else:
 
-	if cfg["log"]:
-		wandb.finish()
+		if cfg["log"]: 
+			wandb.init(project=cfg["project"], config=cfg)
+
+		simulator.run_interactive()
+
+		if cfg["log"]:
+			wandb.finish()
 
 	
 

@@ -1,15 +1,16 @@
 seed: 0
-log: true
+log: False
 ckpt_dir: 
 ckpt_freq: 1_000
 project: "eedx_debug"
 run_name: ""
+debug: true
 
 
 # ===== env =====
 
 env:
-  size: [256,256]
+  size: [32,32]
   max_agents: 32
   init_agents: 16
   birth_pool_size: 8
