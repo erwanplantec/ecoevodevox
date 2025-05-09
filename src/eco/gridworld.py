@@ -178,10 +178,13 @@ class GridWorld:
 												   food_types.dmax)
 	
 		self.chemical_types = chemical_types
-		flow = jnp.asarray(cfg.flow) if cfg.flow is not None else None
+		flow = cfg.flow
+		if cfg.flow is not None:
+			flow = jnp.asarray(cfg.flow)
+			flow = None if jnp.allclose(flow,0.0) else flow
 		self.chemicals_diffusion_conv = make_chemical_diffusion_convolution(cfg.size,
 																			chemical_types.diffusion_rate,
-																			flow=flow)
+																			flow=flow) #type:ignore
 
 		@jax.jit
 		def _vision_fn(x: jax.Array, pos: Position):
