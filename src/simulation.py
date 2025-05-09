@@ -1,6 +1,7 @@
 import jax
 from jax import numpy as jnp, random as jr, nn as jnn
 from jax.experimental import io_callback
+from jax.sharding import PartitionSpec as P, NamedSharding
 import equinox as eqx
 import equinox.nn as nn
 import wandb
@@ -180,7 +181,8 @@ class Simulator:
 				 key: jax.Array, 
 				 log: bool=False,
 				 ckpt_dir: str|None=None,
-				 ckpt_freq: int=10_000):
+				 ckpt_freq: int=10_000, 
+				 n_devices: int|None=None):
 		# ---
 		self.world = world
 		key_sim, key_aux = jr.split(key)
@@ -189,6 +191,8 @@ class Simulator:
 		self.log = log
 		self.ckpt_dir = ckpt_dir
 		self.ckpt_freq = ckpt_freq
+		self.n_devices = jax.device_count() if n_devices is None else n_devices
+		assert world.cfg.max_agents % self.n_devices == 0
 		# ---
 
 		def _log_clbk(data: dict):
@@ -206,7 +210,21 @@ class Simulator:
 		if ckpt_dir:
 			os.makedirs(ckpt_dir, exist_ok=True)
 
-		@jax.jit
+		device_mesh = jax.make_mesh((self.n_devices,), ('N',))
+		state_shardings = EnvState(
+			agents_states=NamedSharding(device_mesh, P("N")), #type:ignore
+			food=None,		   #type:ignore
+			time=None,
+			last_agent_id=None
+		)
+
+		@partial(jax.jit, out_shardings=state_shardings) #type:ignore
+		def init_fn(key:jax.Array)->EnvState:
+			return self.world.init(key)
+		self.init_fn = init_fn
+
+
+		@partial(jax.jit, in_shardings=(state_shardings,None), out_shardings=state_shardings) #type:ignore
 		def _simulation_step(state: EnvState, key: jax.Array)->EnvState:
 			# ---
 			key, key_step = jr.split(key)
@@ -258,7 +276,7 @@ class Simulator:
 		if world_state is None:
 			print("initializing world ...")
 			key_sim, key_init = jr.split(key_sim)
-			world_state = self.world.init(key_init)
+			world_state = self.init_fn(key_init)
 			print("initialization completed")
 
 		while True:

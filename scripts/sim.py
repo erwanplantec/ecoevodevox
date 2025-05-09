@@ -9,7 +9,6 @@ from src.simulation import Simulator
 
 
 
-
 def main():
 	""""""
 	parser = argparse.ArgumentParser()
