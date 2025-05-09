@@ -1,5 +1,5 @@
-from .mutation import make_generalized_mutation
+from .mutation import GeneralizedMutation
 
 mutation_models = {
-	"generalized": make_generalized_mutation
+	"generalized": GeneralizedMutation
 }

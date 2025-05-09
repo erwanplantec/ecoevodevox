@@ -7,7 +7,7 @@ from flax import struct
 from jaxtyping import Float
 import numpy as np
 
-from .base import MotorInterface, Action, Position, PolicyState, MotorState, Info
+from .base import MotorInterface, Action, Body, PolicyState, MotorState, Info
 
 
 class BraitenbergMotorState(struct.PyTreeNode):
@@ -62,7 +62,7 @@ class BraitenbergMotorInterface(MotorInterface):
 
 	#-------------------------------------------------------------------
 	
-	def move(self, action: Action, position: Position) -> Position:
+	def move(self, action: Action, body: Body) -> Body:
 		
 		def _if_not_equal(pos, heading, vr, vl):
 			l = self.radius*2
@@ -74,13 +74,13 @@ class BraitenbergMotorInterface(MotorInterface):
 										 [jnp.sin(omega),  jnp.cos(omega)]], dtype=jnp.float16)
 			pos = rotation_matrix @ (pos-icc) + icc
 			heading = heading + omega
-			return Position(pos, heading)
+			return Body(pos, heading, body.size)
 
 		def _if_equal(pos, heading, vr, vl):
 			pos = pos + vr*jnp.array([jnp.cos(heading), jnp.sin(heading)], dtype=jnp.float16)
-			return Position(pos, heading)
+			return Body(pos, heading, body.size)
 
-		pos, heading = position.pos, position.heading
+		pos, heading = body.pos, body.heading
 		vl, vr = action
 		is_equal = jnp.abs(vr-vl)<1e-5
 		pos = jax.lax.cond(is_equal, _if_equal, _if_not_equal, pos, heading, vr, vl)
@@ -93,6 +93,6 @@ if __name__ == '__main__':
 	
 	interface = BraitenbergMotorInterface(1.0, 0.1)
 	action = jnp.array([1.0,-1.0])
-	position = Position(jnp.zeros(2), jnp.array(jnp.pi))
+	position = Body(jnp.zeros(2), jnp.array(jnp.pi), jnp.ones(()))
 	new_pos = interface.move(action, position)
 	print(new_pos)

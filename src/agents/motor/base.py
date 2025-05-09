@@ -10,7 +10,7 @@ class MotorInterface(PyTreeNode):
 		"""decodes policy state into action"""
 		raise NotImplementedError
 	#-------------------------------------------------------------------
-	def move(self, action: Action, position: Position)->Position:
+	def move(self, action: Action, body: Body)->Body:
 		"""computes effect of action"""
 		raise NotImplementedError
 	#-------------------------------------------------------------------

@@ -1,5 +1,6 @@
 
 import argparse
+import jax
 from jax import numpy as jnp, random as jr, nn as jnn
 import wandb
 import matplotlib.pyplot as plt
@@ -20,9 +21,10 @@ def main():
 	if args.debug:
 		world = simulator.world
 		state = world.init(jr.key(1))
-		state, _ = world.step(state, jr.key(0))
-		state, _ = world.step(state, jr.key(1))
-		plt.scatter(*state.agents_states.position.pos.T); plt.show()
+		new_state, _ = world.step(state, jr.key(0))
+		print(jax.tree.map(lambda a,b: a.dtype==b.dtype, state.agents_states, new_state.agents_states))
+
+		plt.scatter(*state.agents_states.body.pos.T); plt.show()
 
 	else:
 

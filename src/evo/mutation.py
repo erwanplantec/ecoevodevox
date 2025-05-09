@@ -1,3 +1,4 @@
+from typing import Callable
 import jax
 from jax import numpy as jnp, random as jr, nn as jnn
 import equinox as eqx
@@ -6,20 +7,29 @@ from jaxtyping import PyTree
 
 from jax.flatten_util import ravel_pytree
 
+from .core import MutationModel, Genotype, PolicyParams
 
-def make_generalized_mutation(sigma: float, p_mut: float, *, prms_like: PyTree):
-	flat_prms, reshape_epsilon_fn = ravel_pytree(prms_like)
-	num_prms = len(flat_prms)
-	reshaper = reshape_epsilon_fn
+
+class GeneralizedMutation(MutationModel):
 	#-------------------------------------------------------------------
-	def _mutation_fn(prms: PyTree, key: jax.Array)->PyTree:
+	sigma: float
+	p_mut: float
+	num_prms: int
+	reshaper: Callable
+	#-------------------------------------------------------------------
+	def __init__(self, sigma: float, p_mut: float, sigma_size: float=0.0, *, genotype_like: Genotype):
+		super().__init__(sigma_size)
+		self.sigma = sigma
+		self.p_mut = p_mut
+		flat_pparams, self.reshaper = ravel_pytree(genotype_like.policy_params)
+		self.num_prms = len(flat_pparams)
+	#-------------------------------------------------------------------
+	def mutate_policy_params(self, params: PolicyParams, key: jax.Array) -> PolicyParams:
 		k_mut, k_locs = jr.split(key)
-		epsilon = jr.normal(k_mut, (num_prms,)) * sigma
+		epsilon = jr.normal(k_mut, (self.num_prms,)) * self.sigma
 		epsilon = jnp.where(
-			jr.bernoulli(k_locs, p_mut, (num_prms,)),
+			jr.bernoulli(k_locs, self.p_mut, (self.num_prms,)),
 			epsilon, 0.0
 		)
-		epsilon = reshaper(epsilon)
-		return jax.tree.map(lambda x, eps: x+eps, prms, epsilon)
-	#-------------------------------------------------------------------
-	return _mutation_fn
+		epsilon = self.reshaper(epsilon)
+		return jax.tree.map(lambda x, eps: x+eps, params, epsilon)

@@ -11,6 +11,12 @@ import numpy as np
 import yaml
 from functools import partial
 
+from .agents.motor.base import MotorInterface
+from .agents.nn.base import Policy
+from .agents.sensory.base import SensoryInterface
+from .devo.base import DevelopmentalModel
+from .evo.core import MutationModel
+from .agents.core import Genotype
 from .eco.gridworld import EnvState, FoodType, ChemicalType, GridWorld, GridworldConfig
 from .agents import AgentInterface
 from .agents.motor import motor_interfaces
@@ -73,7 +79,7 @@ def init_agents_interface(cfg: dict, key: jax.Array):
 	motor_cfg = cfg["agents"]["motor"]
 	cls = motor_interfaces.get(motor_cfg["which"],None); assert cls is not None, f"motor interface {motor_cfg['which']} is not valid"
 	kwargs = {k:v for k,v in motor_cfg.items() if k !="which"}
-	motor_interface = cls(**kwargs)
+	motor_interface: MotorInterface = cls(**kwargs)
 
 	#---
 	
@@ -81,21 +87,21 @@ def init_agents_interface(cfg: dict, key: jax.Array):
 	sensory_cfg = cfg["agents"]["sensory"]
 	cls = sensory_interfaces.get(sensory_cfg["which"], None); assert cls is not None, f"sensory interface {sensory_cfg['which']} is not valid"
 	kwargs = {k:v for k,v in sensory_cfg.items() if k !="which"}
-	sensory_interface = cls(**kwargs)
+	sensory_interface: SensoryInterface = cls(**kwargs)
 
 	# ---
 
 	enc_cfg = cfg["agents"]["encoding"]
 	cls = encoding_models.get(enc_cfg['which'], None); assert cls is not None, f"encoding model {enc_cfg['which']} is not valid"
 	kwargs = {k:v for k,v in enc_cfg.items() if k !="which"}
-	encoding_model = cls(**kwargs, key=key)
+	encoding_model: DevelopmentalModel = cls(**kwargs, key=key)
 
 	# ---
 
 	nn_cfg = cfg["agents"]["nn"]
 	cls = nn_models.get(nn_cfg["which"], None); assert cls is not None, f"nn model {nn_cfg['which']} is not valid"
 	kwargs = {k:v for k,v in nn_cfg.items() if k !="which"}
-	policy = cls(encoding_model=encoding_model, **kwargs)
+	policy: Policy = cls(encoding_model=encoding_model, **kwargs)
 	policy_prms, _ = eqx.partition(policy, eqx.is_array)
 	policy_apply, policy_init = make_apply_init(policy, reshape_prms=False)
 
@@ -104,12 +110,13 @@ def init_agents_interface(cfg: dict, key: jax.Array):
 	mut_cfg = cfg["agents"]["mutation"]
 	cls = mutation_models.get(mut_cfg["which"], None); assert cls is not None, f"mutation mdl {mut_cfg['which']} is not valid"
 	kwargs = {k:v for k,v in mut_cfg.items() if k !="which"}
-	mutation_fn = cls(prms_like=policy_prms, **kwargs)
+	genotype_like = Genotype(policy_prms, jnp.asarray(0.0))
+	mutation_fn: MutationModel = cls(genotype_like=genotype_like, **kwargs)
 
 	# ---
 
 	def policy_fctry(key: jax.Array):
-		return mutation_fn(policy_prms, key)
+		return mutation_fn.mutate_policy_params(policy_prms, key)
 
 	# ---
 
@@ -118,7 +125,6 @@ def init_agents_interface(cfg: dict, key: jax.Array):
 							   policy_fctry=policy_fctry,
 							   sensory_interface=sensory_interface,
 							   motor_interface=motor_interface,
-							   size=cfg["agents"]["size"],
 							   body_resolution=cfg["agents"]["body_resolution"],
 							   basal_energy_loss=cfg["agents"]["basal_energy_loss"])
 

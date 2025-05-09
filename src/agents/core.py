@@ -5,8 +5,6 @@ from typing import Callable, Tuple
 import jax, jax.random as jr, jax.numpy as jnp
 from flax.struct import PyTreeNode
 from jaxtyping import PyTree, Bool, Int16, UInt16, UInt32, Float16, Float
-import equinox as eqx
-from functools import partial
 
 type PolicyState=PyTree
 type PolicyParams=PyTree
@@ -17,19 +15,24 @@ type MotorState=PyTree
 type Observation=PyTree
 type Info=dict
 
-class Position(PyTreeNode):
+class Genotype(PyTreeNode):
+	policy_params: PolicyParams
+	body_size: Float
+
+class Body(PyTreeNode):
 	pos: jax.Array
-	heading: jax.Array
+	heading: Float
+	size: Float
 
 class AgentState(PyTreeNode):
 	# --- 
-	policy_params: PolicyParams
-	policy_state: PolicyState
+	genotype: Genotype
 	# ---
-	position: Position
+	body: Body
 	# ---
 	motor_state: MotorState
 	sensory_state: SensoryState
+	policy_state: PolicyState
 	# ---
 	alive: Bool
 	age: Int16

@@ -7,6 +7,7 @@ import equinox as eqx
 from celluloid import Camera
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 
 from typing import Callable, Literal, NamedTuple, Tuple
 from jaxtyping import (
@@ -16,7 +17,7 @@ from jaxtyping import (
 	Float16, Float32
 )
 
-from ..agents.interface import AgentInterface, AgentState, Position
+from ..agents.interface import AgentInterface, AgentState, Genotype, Body
 
 # ======================== UTILS =============================
 
@@ -159,7 +160,7 @@ class GridWorld:
 		cfg: GridworldConfig,
 		# ---
 		agent_interface: AgentInterface,
-		mutation_fn: Callable[[AgentParams,jax.Array], AgentParams],
+		mutation_fn: Callable[[Genotype,jax.Array], Genotype],
 		# ---
 		chemical_types: ChemicalType,
 		food_types: FoodType, 
@@ -187,9 +188,9 @@ class GridWorld:
 																			flow=flow) #type:ignore
 
 		@jax.jit
-		def _vision_fn(x: jax.Array, pos: Position):
+		def _vision_fn(x: jax.Array, body: Body):
 			"""Return window of array corresponding to agent view if agent at pos"""
-			indices = get_cell_index(agent_interface.full_body_pos(pos))
+			indices = get_cell_index(agent_interface.full_body_pos(body))
 			return x[:, *indices] if x.ndim==3 else x[*indices]
 
 		self.vision_fn = _vision_fn
@@ -246,24 +247,26 @@ class GridWorld:
 			pad_values = [(0,self.cfg.max_agents-self.cfg.init_agents)] + [(0,0)]*(x.ndim-1)
 			return jnp.pad(x, pad_values)
 
-		key_prms, key_pos, key_head, key_init = jr.split(key, 4)
+		key_prms, key_pos, key_head, key_size, key_init = jr.split(key, 5)
 		alive = jnp.ones(self.cfg.init_agents, dtype=bool)
 		policy_params = jax.vmap(self.agent_interface.policy_fctry)(jr.split(key_prms,self.cfg.init_agents))
-		policy_states, sensory_states, motor_states = jax.vmap(self.agent_interface.init)(
-			policy_params, jr.split(key_init, self.cfg.init_agents)
+		body_sizes = jr.uniform(key_size, (self.cfg.init_agents,), minval=self.agent_interface.min_body_size, maxval=self.agent_interface.max_body_size, dtype=f16) 
+		genotypes = Genotype(policy_params, body_sizes)
+		policy_states, sensory_states, motor_states, body_sizes = jax.vmap(self.agent_interface.init)(
+			genotypes, jr.split(key_init, self.cfg.init_agents)
 		)
 		positions = jr.uniform(key_pos, (self.cfg.init_agents, 2), minval=1.0, maxval=jnp.array(self.cfg.size, dtype=f16)-1, dtype=f16)
 		headings = jr.uniform(key_head, (self.cfg.init_agents,), minval=0.0, maxval=2*jnp.pi, dtype=f16)
-		positions = Position(positions, headings)
+		bodies = Body(positions, headings, body_sizes)
 
 		states = AgentState(
-			# ---
-			policy_params 		 = policy_params, 
+			genotype             = genotypes,
+			# ---, 
 			policy_state 		 = policy_states,
 			sensory_state 		 = sensory_states,
 			motor_state 		 = motor_states,
 			# ---
-			position 			 = positions, 
+			body 			     = bodies, 
 			# ---
 			alive 				 = alive, 
 			energy 				 = jnp.full((self.cfg.init_agents), self.cfg.initial_energy, dtype=f16)*alive, 
@@ -318,7 +321,7 @@ class GridWorld:
 			free_buffer_spots = ~agents.alive # N,
 			_, parents_buffer_id = jax.lax.top_k(reproducing+jr.uniform(key_shuff,reproducing.shape,minval=-0.1,maxval=0.1), self.cfg.birth_pool_size) # add random noise to have non deterministic sammpling
 			parents_mask = reproducing[parents_buffer_id]
-			parents_prms = jax.tree.map(lambda x: x[parents_buffer_id], agents.policy_params)
+			parents_genotypes = jax.tree.map(lambda x: x[parents_buffer_id], agents.genotype)
 			is_free, childs_buffer_id = jax.lax.top_k(free_buffer_spots, self.cfg.birth_pool_size)
 			childs_mask = parents_mask & is_free #is a child if parent was actually reproducing and there are free buffer spots
 			childs_buffer_id = jnp.where(childs_mask, childs_buffer_id, self.cfg.max_agents) # assign wrong index if not born
@@ -326,27 +329,25 @@ class GridWorld:
 
 			childs_alive = childs_mask
 			
-			childs_policy_params = jax.vmap(self.mutation_fn)(parents_prms, jr.split(key_mut, self.cfg.birth_pool_size))
-			childs_policy_states, childs_sensory_states, childs_motor_states = jax.vmap(self.agent_interface.init)(
-				childs_policy_params, jr.split(key_init, self.cfg.birth_pool_size)
+			childs_genotypes= jax.vmap(self.mutation_fn)(parents_genotypes, jr.split(key_mut, self.cfg.birth_pool_size))
+			childs_policy_states, childs_sensory_states, childs_motor_states, childs_sizes = jax.vmap(self.agent_interface.init)(
+				childs_genotypes, jr.split(key_init, self.cfg.birth_pool_size)
 			)
-
-			childs_policy_states = jax.vmap(self.agent_interface.policy_init)(childs_policy_params, jr.split(key_init, self.cfg.birth_pool_size))
 			
 			childs_energy = jnp.full(self.cfg.birth_pool_size, self.cfg.initial_energy, dtype=f16)
 
-			parents_heading = agents.position.heading[parents_buffer_id]
-			direction = -parents_heading
-			delta = jnp.stack([jnp.cos(direction), jnp.sin(parents_heading)], axis=-1)
-			childs_positions = agents.position.pos[parents_buffer_id] + delta*2.0*self.agent_interface.size
+			parents_bodies = jax.tree.map(lambda x: x[parents_buffer_id], agents.body)
+			direction = jnp.mod(parents_bodies.heading + jnp.pi, 2*jnp.pi)
+			delta = jnp.stack([jnp.cos(direction), jnp.sin(direction)], axis=-1)
+			childs_positions = agents.body.pos[parents_buffer_id] + delta*(parents_bodies.size+childs_sizes+0.1)[:,None] 
 			childs_headings = jr.uniform(key_head, minval=0.0, maxval=2*jnp.pi, dtype=f16)
-			childs_positions = Position(childs_positions, childs_headings)
+			childs_bodies = Body(childs_positions, childs_headings, childs_sizes)
 
 			agents_alive = agents.alive.at[childs_buffer_id].set(childs_alive) #make sur to not overwrite occupied buffer ids (if more reproducers than free buffer spots)
 			
-			agents_policy_params = jax.tree.map(
+			agents_genotypes = jax.tree.map(
 				lambda x, x_child: x.at[childs_buffer_id].set(x_child),
-				agents.policy_params, childs_policy_params
+				agents.genotype, childs_genotypes
 			)
 			
 			agents_policy_states = jax.tree.map(lambda x, c: x.at[childs_buffer_id].set(c), agents.policy_state, childs_policy_states)
@@ -356,7 +357,7 @@ class GridWorld:
 			agents_energy = agents.energy.at[childs_buffer_id].set(childs_energy)
 			agents_energy = agents_energy.at[parents_buffer_id].add(-self.cfg.reproduction_cost * childs_mask)
 			
-			agents_positions = jax.tree.map(lambda x, c: x.at[childs_buffer_id].set(c), agents.position, childs_positions)
+			agents_bodies = jax.tree.map(lambda x, c: x.at[childs_buffer_id].set(c), agents.body, childs_bodies)
 			
 			agents_tat = agents.time_above_threshold
 			agents_tbt = agents.time_below_threshold
@@ -383,13 +384,13 @@ class GridWorld:
 			agents_generation = agents.generation.at[childs_buffer_id].set(parents_generation+1)
 
 			agents = AgentState(
-				policy_params 		 = agents_policy_params,
+				genotype		 	 = agents_genotypes,
+				# ----
 				policy_state 		 = agents_policy_states,
-				# ---
 				sensory_state 		 = agents_sensory_states,
 				motor_state 		 = agents_motor_states,
 				# ---
-				position 			 = agents_positions,
+				body 			 	 = agents_bodies,
 				# ---
 				alive 				 = agents_alive,
 				age 				 = agents_age,
@@ -440,27 +441,27 @@ class GridWorld:
 		chemical_fields = self.chemicals_diffusion_conv(chemical_source_fields)
 
 		agents = state.agents_states
-		agents_i, agents_j = get_cell_index(agents.position.pos).T
+		agents_i, agents_j = get_cell_index(agents.body.pos).T
 		agents_alive_grid = jnp.zeros(self.cfg.size).at[agents_i, agents_j].add(agents.alive)
 		agents_scent_field = jsp.signal.convolve(agents_alive_grid, self.agent_scent_diffusion_kernel, mode="same")
 		
 		chemical_fields = jnp.concatenate([agents_scent_field[None], chemical_fields],axis=0)
 		chemical_fields = jnp.where(chemical_fields<self.cfg.chemicals_detection_threshold, 0.0, chemical_fields) #C,H,W
 
-		agents_chemicals_inputs = jax.vmap(self.vision_fn, in_axes=(None,0))(chemical_fields, agents.position)
+		agents_chemicals_inputs = jax.vmap(self.vision_fn, in_axes=(None,0))(chemical_fields, agents.body)
 
 		agents_internal_inputs = jnp.concatenate([agents.energy[:,None], agents.reward[:,None]], axis=-1)
 
-		agents_walls_inputs = jax.vmap(self.vision_fn, in_axes=(None,0))(self.walls[None], agents.position)
+		agents_walls_inputs = jax.vmap(self.vision_fn, in_axes=(None,0))(self.walls[None], agents.body)
 
 		return Observation(chemicals=agents_chemicals_inputs, internal=agents_internal_inputs, walls=agents_walls_inputs)
 
 	#-------------------------------------------------------------------
 
-	def _normalize_position(self, position: Position):
-		pos = jnp.mod(position.pos, jnp.array(self.cfg.size))
-		heading = jnp.mod(position.heading, 2*jnp.pi)
-		return Position(pos, heading)
+	def _normalize_position(self, body: Body):
+		pos = jnp.mod(body.pos, jnp.array(self.cfg.size))
+		heading = jnp.mod(body.heading, 2*jnp.pi)
+		return body.replace(pos=pos, heading=heading)
 
 	def _apply_actions(self, state: EnvState, actions: jax.Array)->Tuple[EnvState, dict]:
 		"""
@@ -469,7 +470,7 @@ class GridWorld:
 
 		# --- 1. Move ---
 
-		new_positions = jax.vmap(self.agent_interface.move)(actions, agents.position)
+		new_positions = jax.vmap(self.agent_interface.move)(actions, agents.body)
 		new_positions = self._normalize_position(new_positions)
 		hits_wall = jax.vmap(lambda p: jnp.any(self.walls[*get_cell_index(self.agent_interface.full_body_pos(p))]))(new_positions)
 		hits_wall = hits_wall & agents.alive
@@ -486,7 +487,7 @@ class GridWorld:
 			raise ValueError(f"wall effect {self.cfg.wall_effect} is not valid")
 
 		agents = agents.replace(
-			position = new_positions,
+			body 	 = new_positions,
 			alive    = agents_alive,
 			energy   = agents_energy
 		)
@@ -495,7 +496,7 @@ class GridWorld:
 
 		food = state.food
 		eating_agents = agents.alive & (agents.energy<self.cfg.max_energy) #can only eat if not full and alive
-		body_cells = get_cell_index(jax.vmap(self.agent_interface.full_body_pos)(agents.position)) #N,2,S,S
+		body_cells = get_cell_index(jax.vmap(self.agent_interface.full_body_pos)(agents.body)) #N,2,S,S
 		*_, S = body_cells.shape
 		eating_agents_expanded = jnp.tile(eating_agents[:,None,None], (1,S,S))
 
@@ -575,10 +576,21 @@ class GridWorld:
 
 		img = jnp.where(self.walls[...,None], jnp.array([0.5, 0.5, 0.5, 1.0]), img)
 
-		ai, aj = agents.position.pos[agents.alive].T
+		colormap = lambda e: plt.cm.winter((e / (self.cfg.max_energy*2) + 1) /2) #type:ignore
+		for a in range(self.cfg.max_agents):
+			if not agents.alive[a] : continue
+			body = jax.tree.map(lambda x: x[a], agents.body)
+			x,y = body.pos
+			h = body.heading
+			e = agents.energy[a]
+			s = body.size
+			body = Rectangle([x-s/2,y-s/2], s, s, angle=(h/(2*jnp.pi))*360, 
+                     facecolor=colormap(e), rotation_point="center")
+			ax.add_patch(body)
+			dy, dx = jnp.sin(h), jnp.cos(h)
+			ax.arrow(x, y, dx*s/2, dy*s/2)
 
-		ax.scatter(aj,ai, marker="s", color="k")
-		ax.imshow(img, origin="lower")
+		ax.imshow(img.transpose(1,0,2), origin="lower")
 
 	# ---
 
