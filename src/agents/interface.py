@@ -1,6 +1,6 @@
 from .sensory import SensoryInterface
 from .motor import MotorInterface
-from ..nn import Policy
+from .nn import Policy
 from .core import *
 
 from typing import Callable, Tuple

@@ -15,8 +15,8 @@ from .eco.gridworld import EnvState, FoodType, ChemicalType, GridWorld, Gridworl
 from .agents import AgentInterface
 from .agents.motor import motor_interfaces
 from .agents.sensory import sensory_interfaces
+from .agents.nn import make_apply_init, nn_models
 from .devo import encoding_models
-from .nn import make_apply_init, nn_models
 from .evo import mutation_models
 
 
@@ -77,6 +77,7 @@ def init_agents_interface(cfg: dict, key: jax.Array):
 
 	#---
 	
+
 	sensory_cfg = cfg["agents"]["sensory"]
 	cls = sensory_interfaces.get(sensory_cfg["which"], None); assert cls is not None, f"sensory interface {sensory_cfg['which']} is not valid"
 	kwargs = {k:v for k,v in sensory_cfg.items() if k !="which"}

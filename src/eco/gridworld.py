@@ -12,8 +12,7 @@ from typing import Callable, Literal, NamedTuple, Tuple
 from jaxtyping import (
 	Float, PyTree, Array,
 	Bool,
-	Int16, Int32,
-	UInt8, UInt16, UInt32,
+	UInt32,
 	Float16, Float32
 )
 
@@ -66,7 +65,8 @@ def make_growth_convolution(env_size: tuple[int,int],
 	return _conv
 
 def make_chemical_diffusion_convolution(env_size: tuple[int,int],
-										diffusion_rates: jax.Array):
+										diffusion_rates: jax.Array,
+										flow: jax.Array|None=None):
 	# ---
 	H, W = env_size
 	# ---
@@ -76,7 +76,17 @@ def make_chemical_diffusion_convolution(env_size: tuple[int,int],
 	L = jnp.mgrid[-mH:mH,-mW:mW]
 	D = jnp.sum(jnp.square(L), axis=0, keepdims=True) #1,H,W
 
-	diffusion_kernels = jnp.exp(-D/diffusion_rates[:,None,None]); assert isinstance(diffusion_kernels, jax.Array)
+	if flow is None:
+		diffusion_kernels = jnp.exp(-D/diffusion_rates[:,None,None])
+	else:
+		flow_norm = jnp.linalg.norm(flow)
+		unit_flow = flow/flow_norm
+		cosines = jnp.sum(L*unit_flow[:,None,None], axis=0) / (jnp.linalg.norm(L,axis=0))
+		cosines = (cosines+1.0) * 0.5
+		diffusion_kernels = jnp.exp(-D / ( cosines * diffusion_rates[:,None,None] * flow_norm + (1-cosines)*0.1))
+
+	diffusion_kernels = diffusion_kernels / jnp.sum(diffusion_kernels, axis=(1,2), keepdims=True) #normalize kernels
+	
 	diffusion_kernels_fft = jnp.fft.fft2(jnp.fft.fftshift(diffusion_kernels, axes=(1,2)))
 
 	@jax.jit
@@ -136,6 +146,7 @@ class GridworldConfig(PyTreeNode):
 	# ---
 	birth_pool_size: int=256
 	# ---
+	flow: jax.Array|tuple[float,float]|None=None
 
 #=======================================================================
 
@@ -167,8 +178,10 @@ class GridWorld:
 												   food_types.dmax)
 	
 		self.chemical_types = chemical_types
+		flow = jnp.asarray(cfg.flow) if cfg.flow is not None else None
 		self.chemicals_diffusion_conv = make_chemical_diffusion_convolution(cfg.size,
-																			chemical_types.diffusion_rate)
+																			chemical_types.diffusion_rate,
+																			flow=flow)
 
 		@jax.jit
 		def _vision_fn(x: jax.Array, pos: Position):
@@ -224,19 +237,23 @@ class GridWorld:
 
 	#-------------------------------------------------------------------
 
-	def _init_agents(self, key):
+	def _init_agents(self, key)->AgentState:
+
+		def _pad(x):
+			pad_values = [(0,self.cfg.max_agents-self.cfg.init_agents)] + [(0,0)]*(x.ndim-1)
+			return jnp.pad(x, pad_values)
 
 		key_prms, key_pos, key_head, key_init = jr.split(key, 4)
-		alive = jnp.arange(self.cfg.max_agents) < self.cfg.init_agents
-		policy_params = jax.vmap(self.agent_interface.policy_fctry)(jr.split(key_prms,self.cfg.max_agents))
+		alive = jnp.ones(self.cfg.init_agents, dtype=bool)
+		policy_params = jax.vmap(self.agent_interface.policy_fctry)(jr.split(key_prms,self.cfg.init_agents))
 		policy_states, sensory_states, motor_states = jax.vmap(self.agent_interface.init)(
-			policy_params, jr.split(key_init, self.cfg.max_agents)
+			policy_params, jr.split(key_init, self.cfg.init_agents)
 		)
-		positions = jr.uniform(key_pos, (self.cfg.max_agents, 2), minval=1.0, maxval=jnp.array(self.cfg.size, dtype=f16)-1, dtype=f16)
-		headings = jr.uniform(key_head, (self.cfg.max_agents,), minval=0.0, maxval=2*jnp.pi, dtype=f16)
+		positions = jr.uniform(key_pos, (self.cfg.init_agents, 2), minval=1.0, maxval=jnp.array(self.cfg.size, dtype=f16)-1, dtype=f16)
+		headings = jr.uniform(key_head, (self.cfg.init_agents,), minval=0.0, maxval=2*jnp.pi, dtype=f16)
 		positions = Position(positions, headings)
 
-		return AgentState(
+		states = AgentState(
 			# ---
 			policy_params 		 = policy_params, 
 			policy_state 		 = policy_states,
@@ -246,19 +263,23 @@ class GridWorld:
 			position 			 = positions, 
 			# ---
 			alive 				 = alive, 
-			energy 				 = jnp.full((self.cfg.max_agents), self.cfg.initial_energy, dtype=f16)*alive, 
-			time_above_threshold = jnp.full((self.cfg.max_agents,), 0, dtype=ui16), 
-			time_below_threshold = jnp.full((self.cfg.max_agents,), 0, dtype=ui16),
+			energy 				 = jnp.full((self.cfg.init_agents), self.cfg.initial_energy, dtype=f16)*alive, 
+			time_above_threshold = jnp.full((self.cfg.init_agents,), 0, dtype=ui16), 
+			time_below_threshold = jnp.full((self.cfg.init_agents,), 0, dtype=ui16),
 			# ---
-			reproduce 			 = jnp.full((self.cfg.max_agents,), False, dtype=bool),
-			reward 				 = jnp.zeros((self.cfg.max_agents,), dtype=f16), 
+			reproduce 			 = jnp.full((self.cfg.init_agents,), False, dtype=bool),
+			reward 				 = jnp.zeros((self.cfg.init_agents,), dtype=f16), 
 			# ---
-			age 				 = jnp.ones((self.cfg.max_agents), dtype=ui16), 
-			n_offsprings 		 = jnp.zeros(self.cfg.max_agents, dtype=ui16),
+			age 				 = jnp.ones((self.cfg.init_agents), dtype=ui16), 
+			n_offsprings 		 = jnp.zeros(self.cfg.init_agents, dtype=ui16),
 			id_ 				 = jnp.where(alive, jnp.cumsum(alive, dtype=ui32), 0),
-			parent_id_ 			 = jnp.zeros(self.cfg.max_agents, dtype=ui32),
-			generation 			 = jnp.zeros(self.cfg.max_agents, dtype=ui16),
+			parent_id_ 			 = jnp.zeros(self.cfg.init_agents, dtype=ui32),
+			generation 			 = jnp.zeros(self.cfg.init_agents, dtype=ui16),
 		)
+
+		states = jax.tree.map(_pad, states)
+
+		return states
 
 	#-------------------------------------------------------------------
 
@@ -338,7 +359,6 @@ class GridWorld:
 			agents_tbt = agents.time_below_threshold
 			agents_tat = agents_tat.at[parents_buffer_id].set(0)
 			agents_tat = agents_tat.at[childs_buffer_id].set(0)
-			
 			agents_tbt = agents_tbt.at[childs_buffer_id].set(0)
 
 			agents_age = agents.age.at[childs_buffer_id].set(1)
@@ -553,6 +573,7 @@ class GridWorld:
 		img = jnp.where(self.walls[...,None], jnp.array([0.5, 0.5, 0.5, 1.0]), img)
 
 		ai, aj = agents.position.pos[agents.alive].T
+
 		ax.scatter(aj,ai, marker="s", color="k")
 		ax.imshow(img, origin="lower")
 

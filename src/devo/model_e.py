@@ -1,8 +1,8 @@
 from jax.flatten_util import ravel_pytree
 
-from .base import BaseDevelopmentalModel
-from ..nn.rnn import SERNN
-from ..nn.ctrnn import SECTRNN
+from .base import DevelopmentalModel
+from src.agents.nn.rnn import SERNN
+from src.agents.nn.ctrnn import SECTRNN
 
 import jax
 import jax.numpy as jnp
@@ -142,7 +142,7 @@ class MLPConn(nn.MLP):
 # ======================================================
 
     
-class Model_E(BaseDevelopmentalModel):
+class Model_E(DevelopmentalModel):
     # --- params ---
     types: RNNNeuronType|CTRNNNeuronType
     connection_model: PyTree

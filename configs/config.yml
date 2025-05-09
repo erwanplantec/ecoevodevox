@@ -5,6 +5,7 @@ ckpt_freq: 1_000
 project: "eedx_debug"
 run_name: ""
 debug: true
+flow: [1,0]
 
 
 # ===== env =====

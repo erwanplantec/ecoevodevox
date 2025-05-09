@@ -8,9 +8,9 @@ import equinox as eqx
 import equinox.nn as nn
 from jaxtyping import Float, PyTree
 
-from ..nn.rnn import SERNN
+from src.agents.nn.rnn import SERNN
 
-from .base import BaseDevelopmentalModel
+from .base import DevelopmentalModel
 from .model_e import XOXT
 
 def M(p, extra_zero_field=0):
@@ -58,7 +58,7 @@ class State(SERNN):
 	s: jax.Array
 	m: jax.Array
 
-class GRNEncoding(BaseDevelopmentalModel):
+class GRNEncoding(DevelopmentalModel):
 	# ---
 	grn: GRN
 	encoder: SpatioemporalEncoder

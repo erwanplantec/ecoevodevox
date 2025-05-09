@@ -4,7 +4,8 @@ import equinox as eqx
 from jaxtyping import PyTree
 
 
-class BaseDevelopmentalModel(eqx.Module):
-
+class DevelopmentalModel(eqx.Module):
+	#-------------------------------------------------------------------
 	def __call__(self, key: jax.Array)->PyTreeNode:
 		raise NotImplementedError
+	#-------------------------------------------------------------------
