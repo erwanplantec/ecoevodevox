@@ -9,7 +9,7 @@ import equinox.nn as nn
 from jaxlib.mlir.ir import Value
 from jaxtyping import Float, PyTree
 
-from agents.nn.ctrnn import SECTRNN
+from src.agents.nn.ctrnn import SECTRNN
 from src.agents.nn.rnn import SERNN
 
 from .base import DevelopmentalModel
