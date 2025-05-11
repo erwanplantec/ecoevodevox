@@ -31,7 +31,7 @@ class CiliatedMotorInterface(MotorInterface):
 		assert hasattr(policy_state, "m") 
 		# ---
 		xs = policy_state.x
-		is_motor = policy_state.m > 0.0
+		is_motor = policy_state.m[:,0] > 0.0
 		side_motors = is_motor & (jnp.abs(xs[:,0]) > 0.8)
 
 		return CiliatedMotorState(is_motor, side_motors)
@@ -41,7 +41,7 @@ class CiliatedMotorInterface(MotorInterface):
 	def decode(self, policy_state: PolicyState, motor_state: CiliatedMotorState) -> tuple[Action, Float, CiliatedMotorState, Info]:
 		
 		xs = policy_state.x
-		ms = jnp.clip(policy_state.m, min=0.0)
+		ms = jnp.clip(policy_state.m[:,0], min=0.0)
 		vs = policy_state.v
 
 		forces = jnp.where(motor_state.is_motor, vs * ms * self.neuron_force_gain, 0.0); assert isinstance(forces, jax.Array)
@@ -54,8 +54,7 @@ class CiliatedMotorInterface(MotorInterface):
 		velocity = jnp.clip(
 			jnp.where(motor_state.on_side, 0.0, -forces*jnp.sign(xs[:,0])),
 			-self.max_velocity, self.max_velocity
-		)
-
+		).sum()
 		action = jnp.array([omega, velocity])
 
 		energy_loss = jnp.sum(forces * self.motor_energy_cost)
