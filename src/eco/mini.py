@@ -92,9 +92,11 @@ class MoveTrivialEnv(MiniEnv):
 
 class ChemotaxisEnv(MiniEnv):
 	#-------------------------------------------------------------------
-	def __init__(self, interface: AgentInterface, sigma: float=5.0, grid_size: tuple[int,int]=(32,32)):
+	def __init__(self, interface: AgentInterface, sigma: float=5.0, grid_size: tuple[int,int]=(32,32),
+		move_bonus: float=0.01):
 		super().__init__(grid_size, interface)
 		self.sigma = sigma
+		self.move_bonus = move_bonus
 	#-------------------------------------------------------------------
 	def reset(self, params: PolicyParams, key: jax.Array)->MiniEnvState:
 
@@ -113,7 +115,9 @@ class ChemotaxisEnv(MiniEnv):
 	def evaluate(self, params: PolicyParams, key: jax.Array) -> tuple[Float, dict]:
 		state = self.rollout(params, 32, key)
 		i, j = get_cell_index(state.agent_state.body.pos)
-		return state.state_grid[0,i,j], dict()
+		has_moved = jnp.linalg.norm(state.agent_state.body.pos)>0
+		bonus = jax.lax.select(has_moved, self.move_bonus, 0.0)
+		return state.state_grid[0,i,j] + bonus, dict()
 
 
 def make(cfg, agent_interface):

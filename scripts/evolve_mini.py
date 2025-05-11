@@ -76,7 +76,7 @@ def make_train_fn(cfg, key):
 		return fitness.mean()
 
 	Strategy = getattr(ex, cfg["algo"]["strategy"])
-	es: ex.Strategy = Strategy(popsize=cfg["algo"]["popsize"], pholder_params=prms, n_devices=1, **cfg["algo"]["args"])
+	es: ex.Strategy = Strategy(popsize=cfg["algo"]["popsize"], pholder_params=prms, n_devices=1, **cfg["algo"].get("args", dict()))
 
 	def _log_clbck(data):
 		wandb.log(data)

@@ -85,6 +85,7 @@ class GRNEncoding(DevelopmentalModel):
 		population_gain: float=10., 
 		max_neurons: int=128,  
 		nb_init_neurons: int=8,
+		gene_decay: bool=True,
 		*, key: jax.Array):
 
 		grn_key, encoder_key, conn_key, g2p_key = jr.split(key, 4)
@@ -102,7 +103,7 @@ class GRNEncoding(DevelopmentalModel):
 		nb_genes = len(flat_genes)
 		self.genome_shaper = genome_shaper
 		
-		self.grn = GRN(nb_genes, nb_genes, expression_max=1.0, expression_min=-1.0, has_autonomous_decay=True, key=grn_key)
+		self.grn = GRN(nb_genes, nb_genes, expression_max=1.0, expression_min=-1.0, has_autonomous_decay=gene_decay, key=grn_key)
 		self.encoder = SpatioemporalEncoder(nb_genes, key=encoder_key)
 		self.O = jr.normal(conn_key, (nb_synaptic_genes,)*2)*0.1
 		self.gene_to_migration_prms = nn.Linear(migration_fields, migration_fields, use_bias=False, key=g2p_key)

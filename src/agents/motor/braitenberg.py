@@ -16,7 +16,6 @@ class BraitenbergMotorState(struct.PyTreeNode):
 
 class BraitenbergMotorInterface(MotorInterface):
 	#-------------------------------------------------------------------
-	radius: float
 	dt: float=1.0
 	max_distance_to_motor: float=0.2 
 	max_speed: float=1.0
@@ -64,9 +63,10 @@ class BraitenbergMotorInterface(MotorInterface):
 	
 	def move(self, action: Action, body: Body) -> Body:
 		
+		radius = body.size/2
 		def _if_not_equal(pos, heading, vr, vl):
-			l = self.radius*2
-			r = self.radius * (vl+vr) / (vr-vl)
+			l = radius*2
+			r = radius * (vl+vr) / (vr-vl)
 			icc = pos + jnp.array([-r*jnp.sin(heading),r*jnp.cos(heading)], dtype=jnp.float16)
 			omega = (vr-vl)/l
 			omega = omega*self.dt
