@@ -36,7 +36,7 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 		_xs = (xs+1)/2.0001 #make sure it does not reach upper bound
 		coords = jnp.floor(_xs * D)
 		coords = coords.astype(jnp.int16)
-		j, i = coords.T
+		i, j = coords.T
 
 		Ic = jnp.where(on_border, jnp.sum(C[:,i,j].T * s[:,:mC], axis=1), 0.0) # chemical input #type:ignore
 		Iw = jnp.where(on_border, jnp.sum(W[:,i,j].T * s[:,mC:mC+1], axis=1), 0.0) # walls input #type:ignore

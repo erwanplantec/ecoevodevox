@@ -73,6 +73,7 @@ class GRNEncoding(DevelopmentalModel):
 	O: jax.Array
 	gene_to_migration_prms: nn.Linear
 	population: Float
+	s0: jax.Array
 	nb_genes: int
 	population_gain: float
 	T: float
@@ -128,6 +129,7 @@ class GRNEncoding(DevelopmentalModel):
 		else: raise ValueError(f"network_type {network_type} is not valid")
 		flat_genes, genome_shaper = ravel_pytree(genes_compartments)
 		nb_genes = len(flat_genes)
+		self.s0 = jnp.zeros(nb_genes)
 		self.genome_shaper = genome_shaper
 		
 		self.grn = GRN(nb_genes, nb_genes, expression_max=1.0, expression_min=-1.0, has_autonomous_decay=gene_decay, key=grn_key)
@@ -180,7 +182,7 @@ class GRNEncoding(DevelopmentalModel):
 
 		P0_key, dev_key = jr.split(key, 2)
 
-		S0 = jnp.zeros((self.max_neurons, self.nb_genes))
+		S0 = jnp.repeat(self.s0[None], self.max_neurons, 0)
 		P0 = jr.uniform(P0_key, (self.max_neurons, 2), minval=-0.1, maxval=0.1)
 
 		S,P, *_ = jax.lax.fori_loop(0, int(self.T//self.dt), _step, [S0,P0,0.0,dev_key])
