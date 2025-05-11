@@ -43,8 +43,8 @@ class AgentInterface(eqx.Module):
 		# ---
 		deltas = jnp.stack(
 			[jnp.linspace(-0.5, 0.4999, body_resolution)[:,None].repeat(body_resolution, 1),
-			 jnp.linspace(-0.5, 0.4999, body_resolution)[None,:].repeat(body_resolution, 0)]
-		)
+			 -jnp.linspace(-0.5, 0.4999, body_resolution)[None,:].repeat(body_resolution, 0)]
+		).transpose(0,2,1)
 		deltas_single_batch_dim = deltas.reshape(2,-1)
 
 		@jax.jit

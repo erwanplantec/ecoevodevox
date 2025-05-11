@@ -433,10 +433,8 @@ class GridWorld:
 
 	#-------------------------------------------------------------------
 
-	def _get_observations(self, state: EnvState)->Observation:
-		"""
-		returns agents observations
-		"""
+	def _compute_chemical_fields(self, state: EnvState)->jax.Array:
+
 		chemical_source_fields = jnp.sum(state.food[:,None] * self.food_types.chemical_signature[...,None,None], axis=0)
 		chemical_fields = self.chemicals_diffusion_conv(chemical_source_fields)
 
@@ -447,6 +445,18 @@ class GridWorld:
 		
 		chemical_fields = jnp.concatenate([agents_scent_field[None], chemical_fields],axis=0)
 		chemical_fields = jnp.where(chemical_fields<self.cfg.chemicals_detection_threshold, 0.0, chemical_fields) #C,H,W
+
+		return chemical_fields
+
+	#-------------------------------------------------------------------
+
+	def _get_observations(self, state: EnvState)->Observation:
+		"""
+		returns agents observations
+		"""
+		agents = state.agents_states
+
+		chemical_fields = self._compute_chemical_fields(state)
 
 		agents_chemicals_inputs = jax.vmap(self.vision_fn, in_axes=(None,0))(chemical_fields, agents.body)
 
@@ -531,7 +541,7 @@ class GridWorld:
 
 	def _init_food(self, key)->FoodMap:
 		food = jr.bernoulli(key, self.food_types.initial_density[:,None,None], (self.n_food_types, *self.cfg.size))
-		food = jnp.where(jnp.cumsum(food.astype(jnp.uint4),axis=0)>food, False, food)
+		food = jnp.where(jnp.cumsum(food.astype(jnp.uint4),axis=0)>1, False, food)
 		return food
 
 	# ---
@@ -540,13 +550,14 @@ class GridWorld:
 		"""Do one step of food growth"""
 		food = state.food
 		# --- Grow ---
+		occupied = jnp.any(food, axis=0)
 		p_grow = self.growth_conv(food); assert isinstance(p_grow, jax.Array)
 		p_grow = p_grow + self.food_types.spontaneous_grow_prob[:,None,None]
 		p_grow = jnp.clip(p_grow, 0.0, 1.0)
 		grow = jr.bernoulli(key, p_grow)
 
 		grow = jnp.where(
-			jnp.cumsum(grow.astype(jnp.uint4),axis=0)>1 | self.walls[None],
+			(jnp.cumsum(grow,axis=0)>1) | self.walls[None] | occupied[None],
 			False,
 			grow
 		)

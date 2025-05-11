@@ -43,4 +43,5 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 		Ii = jnp.sum(s[:, mC+1:] * obs.internal, axis=1) # internal input #type:ignore
 
 		I = Ic + Iw + Ii
+
 		return I, sensory_state
