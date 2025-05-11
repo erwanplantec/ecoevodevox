@@ -6,8 +6,10 @@ import jax.random as jr
 import jax.nn as jnn
 import equinox as eqx
 import equinox.nn as nn
+from jaxlib.mlir.ir import Value
 from jaxtyping import Float, PyTree
 
+from agents.nn.ctrnn import SECTRNN
 from src.agents.nn.rnn import SERNN
 
 from .base import DevelopmentalModel
@@ -54,9 +56,15 @@ class SpatioemporalEncoder(eqx.Module):
 		output = self.encoder(inp)
 		return output
 
-class State(SERNN):
+class RNNState(SERNN):
 	s: jax.Array
 	m: jax.Array
+
+class CTRNNState(SECTRNN):
+	s: jax.Array
+	m: jax.Array
+
+type State = RNNState|CTRNNState
 
 class GRNEncoding(DevelopmentalModel):
 	# ---
@@ -72,6 +80,7 @@ class GRNEncoding(DevelopmentalModel):
 	max_neurons: int
 	genome_shaper: Callable
 	extra_migration_fields: int
+	network_type: str
 	# ---
 	def __init__(
 		self, 
@@ -86,19 +95,37 @@ class GRNEncoding(DevelopmentalModel):
 		max_neurons: int=128,  
 		nb_init_neurons: int=8,
 		gene_decay: bool=True,
+		network_type: str="rnn",
 		*, key: jax.Array):
 
 		grn_key, encoder_key, conn_key, g2p_key = jr.split(key, 4)
 
 		migration_fields = M_dims + extra_migration_fields
-		genes_compartments = [
-			jnp.zeros(nb_sensory_genes),
-			jnp.zeros(nb_motor_genes),
-			jnp.zeros(nb_synaptic_genes),
-			jnp.zeros(migration_fields+1),
-			jnp.zeros(migration_fields),
-			jnp.zeros(nb_regulatory_genes)
-		]
+		if network_type=="rnn":
+			genes_compartments = [
+				None,
+				jnp.zeros(nb_sensory_genes),
+				jnp.zeros(nb_motor_genes),
+				jnp.zeros(nb_synaptic_genes),
+				jnp.zeros(migration_fields+1),
+				jnp.zeros(migration_fields),
+				jnp.zeros(nb_regulatory_genes)
+			]
+		elif network_type=="ctrnn":
+			genes_compartments = [
+				(
+					jnp.zeros(()), 
+					jnp.zeros(()),
+					jnp.zeros(())
+				),
+				jnp.zeros(nb_sensory_genes),
+				jnp.zeros(nb_motor_genes),
+				jnp.zeros(nb_synaptic_genes),
+				jnp.zeros(migration_fields+1),
+				jnp.zeros(migration_fields),
+				jnp.zeros(nb_regulatory_genes)
+			]
+		else: raise ValueError(f"network_type {network_type} is not valid")
 		flat_genes, genome_shaper = ravel_pytree(genes_compartments)
 		nb_genes = len(flat_genes)
 		self.genome_shaper = genome_shaper
@@ -115,6 +142,7 @@ class GRNEncoding(DevelopmentalModel):
 		self.population_gain = population_gain
 		self.max_neurons = max_neurons
 		self.extra_migration_fields = extra_migration_fields
+		self.network_type = network_type
 
 	# ---
 	def __call__(self, key: jax.Array) -> State:
@@ -128,7 +156,7 @@ class GRNEncoding(DevelopmentalModel):
 
 			X = jax.vmap(self.encoder, in_axes=(0,None))(P, t)
 			S = jax.vmap(self.grn)(S, X)
-			_, _, _, migration_genes, perturbation_genes, _ = jax.vmap(self.genome_shaper)(S)
+			_, _, _, _, migration_genes, perturbation_genes, _ = jax.vmap(self.genome_shaper)(S)
 
 			def M_(p):
 				dists = jnp.sum(jnp.square(p[None]-P), axis=-1, keepdims=True)
@@ -157,11 +185,22 @@ class GRNEncoding(DevelopmentalModel):
 
 		S,P, *_ = jax.lax.fori_loop(0, int(self.T//self.dt), _step, [S0,P0,0.0,dev_key])
 		
-		sensory_genes, motor_genes, synaptic_genes, *_ = jax.vmap(self.genome_shaper)(S)
+		neurons_prms, sensory_genes, motor_genes, synaptic_genes, *_ = jax.vmap(self.genome_shaper)(S)
 		W = synaptic_genes @ self.O @ synaptic_genes.T
 		W = W * (mask[None]*mask[:,None])
 
-		return State(v=jnp.zeros(self.max_neurons),W=W, mask = mask, x=P, s=sensory_genes, m=motor_genes)
+		if self.network_type=="rnn":
+			return RNNState(v=jnp.zeros(self.max_neurons),W=W, mask = mask, x=P, s=sensory_genes, m=motor_genes)
+		elif self.network_type=="ctrnn":
+			tau, gain, bias = neurons_prms
+			tau = jnp.clip(tau/2+0.5, 0.01, 1.0)
+			gain = jnp.square(gain)+1
+			bias = bias * 5.0
+			return CTRNNState(
+				v=jnp.zeros(self.max_neurons),W=W, mask = mask, x=P, s=sensory_genes, m=motor_genes,
+				tau=tau, gain=gain, bias=bias)
+		else :
+			raise ValueError("network type not valid")
 
 
 #-------------------------------------------------------------------
