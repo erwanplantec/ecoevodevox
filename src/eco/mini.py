@@ -34,7 +34,7 @@ class MiniEnv:
 		k1, k2 = jr.split(key)
 
 		start_pos = jnp.asarray(self.grid_size)/2
-		start_heading = jnp.pi/2
+		start_heading = jnp.asarray(jnp.pi/2).astype(jnp.float16)
 	
 		policy_state, sensory_state, motor_state, body_size = self.agent_interface.init(genotype, k2)
 		body = Body(start_pos, start_heading, body_size)
