@@ -45,6 +45,7 @@ class CiliatedMotorInterface(MotorInterface):
 		vs = policy_state.v
 
 		forces = jnp.where(motor_state.is_motor, vs * ms * self.neuron_force_gain, 0.0); assert isinstance(forces, jax.Array)
+		forces = jnp.clip(forces, 0, self.max_neuron_force)
 		omegas = jnp.where(
 			motor_state.on_side, 
 			forces * xs[:,1] * jnp.sign(xs[:,0]),
@@ -52,9 +53,9 @@ class CiliatedMotorInterface(MotorInterface):
 		)
 		omega = jnp.clip(jnp.sum(omegas), -self.max_angular_speed, self.max_angular_speed)
 		velocity = jnp.clip(
-			jnp.where(motor_state.on_side, 0.0, -forces*jnp.sign(xs[:,0])),
+			jnp.sum(jnp.clip(jnp.where(motor_state.on_side, 0.0, -forces*jnp.sign(xs[:,0])))),
 			-self.max_velocity, self.max_velocity
-		).sum()
+		)
 		action = jnp.array([omega, velocity])
 
 		energy_loss = jnp.sum(forces * self.motor_energy_cost)

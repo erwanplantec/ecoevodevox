@@ -71,6 +71,24 @@ class MiniEnv:
 		raise NotImplementedError
 
 
+class MoveTrivialEnv(MiniEnv):
+	#-------------------------------------------------------------------
+	def reset(self, params: PolicyParams, key: jax.Array) -> MiniEnvState:
+		k1, k2 = jr.split(key)
+
+		genotype = Genotype(params, 2.0)
+		agent_state = self.init_agent_state(genotype, k1)
+
+		grid = jnp.zeros((1,*self.grid_size))
+
+		return MiniEnvState(grid, agent_state)
+	#-------------------------------------------------------------------
+	def evaluate(self, params: PolicyParams, key: jax.Array) -> tuple[Float, dict]:
+		state = self.rollout(params, 32, key)
+		return jnp.linalg.norm(state.agent_state.body.pos), {}
+
+
+
 
 class ChemotaxisEnv(MiniEnv):
 	#-------------------------------------------------------------------
@@ -102,6 +120,8 @@ def make(cfg, agent_interface):
 	env = cfg["which"]
 	if env=="chemotaxis":
 		return ChemotaxisEnv(agent_interface, **{k:v for k,v in cfg.items() if k!="which"})
+	elif env=="trivial":
+		return MoveTrivialEnv((32,32), agent_interface)
 	else:
 		raise KeyError(f"No env named {env}")
 
