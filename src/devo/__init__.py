@@ -1,3 +1,4 @@
+from .base import DevelopmentalModel
 from .model_e import Model_E
 from .grn import GRNEncoding
 
