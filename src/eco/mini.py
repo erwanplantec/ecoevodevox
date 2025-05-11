@@ -103,7 +103,15 @@ class ChemotaxisEnv(MiniEnv):
 		genotype = Genotype(params, 2.0)
 		agent_state = self.init_agent_state(genotype, k1)
 
-		optima = jnp.zeros(2)
+		optima = jr.choice(
+			k2, 
+			jnp.array([
+				[0,0],
+				[0,self.grid_size[1]],
+				[self.grid_size[0], 0],
+				list(self.grid_size)
+			])
+		)
 		grid = jnp.mgrid[:self.grid_size[0], :self.grid_size[1]]
 		dists = jnp.linalg.norm(grid-optima[:,None,None], axis=0)
 		chem_grid = jnp.exp(-dists**2/self.sigma)
