@@ -79,7 +79,7 @@ class MoveTrivialEnv(MiniEnv):
 		genotype = Genotype(params, 2.0)
 		agent_state = self.init_agent_state(genotype, k1)
 
-		grid = jnp.zeros((1,*self.grid_size))
+		grid = jnp.ones((1,*self.grid_size))
 
 		return MiniEnvState(grid, agent_state)
 	#-------------------------------------------------------------------
