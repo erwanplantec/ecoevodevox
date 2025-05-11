@@ -93,8 +93,10 @@ diff_kernel = jnp.array([[0.1, 0.1, 0.1], [0.1, 1.0, 0.1], [0.1, 0.1, 0.1]])
 
 class Gather(MiniEnv):
 	#-------------------------------------------------------------------
-	def __init__(self, grid_size: tuple[int, int], agent_interface: AgentInterface):
+	def __init__(self, grid_size: tuple[int, int], agent_interface: AgentInterface,
+		density: float=1.0):
 		super().__init__(grid_size, agent_interface)
+		self.density=density
 	#-------------------------------------------------------------------
 	def reset(self, params: PolicyParams, key: jax.Array) -> GatherState:
 		k1, k2 = jr.split(key)
