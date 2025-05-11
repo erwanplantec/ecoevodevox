@@ -104,7 +104,7 @@ class Gather(MiniEnv):
 		genotype = Genotype(params, 2.0)
 		agent_state = self.init_agent_state(genotype, k1)
 
-		food = jr.bernoulli(k2, 1.0, self.grid_size)
+		food = jr.bernoulli(k2, self.density, self.grid_size)
 		chems = jax.scipy.signal.convolve2d(food, diff_kernel)[None]
 
 		return GatherState(chems, agent_state,food)
