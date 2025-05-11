@@ -170,7 +170,7 @@ def make(cfg, agent_interface):
 	elif env=="trivial":
 		return MoveTrivialEnv((32,32), agent_interface)
 	elif env=="gather":
-		return Gather((32,32), agent_interface)
+		return Gather((32,32), agent_interface, density=cfg.get("density",1.0))
 	else:
 		raise KeyError(f"No env named {env}")
 

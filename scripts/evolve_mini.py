@@ -67,7 +67,7 @@ def make_agent(cfg: dict, key: jax.Array):
 def make_train_fn(cfg, key):
 
 	agent_interface, prms = make_agent(cfg["agent"], key=key)
-	env = make_env(cfg["env"], agent_interface, **{k:v for k,v in cfg["env"].items() if k!="which"})
+	env = make_env(cfg["env"], agent_interface)
 	eval_reps = cfg["algo"].get("eval_reps", 1)
 
 	@jax.vmap
