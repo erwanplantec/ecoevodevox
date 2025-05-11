@@ -45,7 +45,7 @@ class MiniEnv:
 		action, agent_state, _ = self.agent_interface.step(obs, state.agent_state, key)
 		new_body = self.agent_interface.move(action, agent_state.body)
 		new_body = new_body.replace(
-			pos = jnp.clip(new_body.pos, 0, jnp.asarray(self.grid_size))
+			pos = jnp.mod(new_body.pos, jnp.asarray(self.grid_size))
 		)
 		agent_state = agent_state.replace(body=new_body)
 		return state.replace(agent_state=agent_state)
@@ -84,6 +84,40 @@ class MoveTrivialEnv(MiniEnv):
 	def evaluate(self, params: PolicyParams, key: jax.Array) -> tuple[Float, dict]:
 		state = self.rollout(params, 32, key)
 		return jnp.linalg.norm(state.agent_state.body.pos), {}
+
+
+class GatherState(MiniEnvState):
+	food: jax.Array
+
+diff_kernel = jnp.array([[0.1, 0.1, 0.1], [0.1, 1.0, 0.1], [0.1, 0.1, 0.1]])
+
+class Gather(MiniEnv):
+	#-------------------------------------------------------------------
+	def __init__(self, grid_size: tuple[int, int], agent_interface: AgentInterface):
+		super().__init__(grid_size, agent_interface)
+	#-------------------------------------------------------------------
+	def reset(self, params: PolicyParams, key: jax.Array) -> GatherState:
+		k1, k2 = jr.split(key)
+
+		genotype = Genotype(params, 2.0)
+		agent_state = self.init_agent_state(genotype, k1)
+
+		food = jr.bernoulli(k2, 1.0, self.grid_size)
+		chems = jax.scipy.signal.convolve2d(food, diff_kernel)[None]
+
+		return GatherState(chems, agent_state,food)
+	#-------------------------------------------------------------------
+	def step(self, state: GatherState, key: jax.Array) -> GatherState:
+		state = super().step(state, key)
+		bps = self.agent_interface.full_body_pos(state.agent_state.body)
+		food = state.food.at[*get_cell_index(bps)].set(False)
+		chems = jax.scipy.signal.convolve2d(food, diff_kernel)[None]
+		return GatherState(chems, state.agent_state, food)
+	#-------------------------------------------------------------------
+	def evaluate(self, params: PolicyParams, key: jax.Array) -> tuple[Float, dict]:
+		states: GatherState = self.rollout(params, 32, key)
+		return -jnp.sum(states.food[-1]), {}
+
 
 
 
@@ -133,6 +167,8 @@ def make(cfg, agent_interface):
 		return ChemotaxisEnv(agent_interface, **{k:v for k,v in cfg.items() if k!="which"})
 	elif env=="trivial":
 		return MoveTrivialEnv((32,32), agent_interface)
+	elif env=="gather":
+		return Gather((32,32), agent_interface)
 	else:
 		raise KeyError(f"No env named {env}")
 
