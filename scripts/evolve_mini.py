@@ -110,8 +110,6 @@ def make_train_fn(cfg, key):
 	return train_fn
 
 
-
-
 if __name__ == '__main__':
 	import yaml
 	import argparse
