@@ -33,7 +33,7 @@ class MiniEnv:
 	def init_agent_state(self, genotype: Genotype, key: jax.Array)->MiniAgentState:
 		k1, k2 = jr.split(key)
 
-		start_pos = jnp.zeros(2)
+		start_pos = jnp.asarray(self.grid_size)/2
 		start_heading = jr.uniform(k1, (), minval=0, maxval=jnp.pi*2)
 	
 		policy_state, sensory_state, motor_state, body_size = self.agent_interface.init(genotype, k2)
@@ -58,14 +58,12 @@ class MiniEnv:
 	#-------------------------------------------------------------------
 	def rollout(self, params: PolicyParams, steps: int,  key: jax.Array)->MiniEnvState:
 		def _step(state, key):
-			key, _key = jr.split(key)
-			state = self.step(state, _key)
-			return state, key
+			state = self.step(state, key)
+			return state, state
 		key_init, key_roll = jr.split(key)
 		state = self.reset(params, key_init)
-		for _ in range(steps):
-			state, key = _step(state, key)
-		return state
+		_, states = jax.lax.scan(_step, state, jr.split(key_roll, steps))
+		return states
 	#-------------------------------------------------------------------
 	def evaluate(self, params: PolicyParams, key: jax.Array)->tuple[Float,dict]:
 		raise NotImplementedError
@@ -113,11 +111,12 @@ class ChemotaxisEnv(MiniEnv):
 		return MiniEnvState(chem_grid[None], agent_state)
 	#-------------------------------------------------------------------
 	def evaluate(self, params: PolicyParams, key: jax.Array) -> tuple[Float, dict]:
-		state = self.rollout(params, 32, key)
-		i, j = get_cell_index(state.agent_state.body.pos)
-		has_moved = jnp.linalg.norm(state.agent_state.body.pos)>0
-		bonus = jax.lax.select(has_moved, self.move_bonus, 0.0)
-		return state.state_grid[0,i,j] + bonus, dict()
+		states = self.rollout(params, 32, key)
+		grid = states.state_grid[0,0]
+		i, j = get_cell_index(states.agent_state.body.pos).T #T,2
+		vals = grid[i,j]
+		fitness = jnp.sum(vals)
+		return fitness, dict()
 
 
 def make(cfg, agent_interface):
