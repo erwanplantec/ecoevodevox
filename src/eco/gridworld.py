@@ -18,10 +18,13 @@ from jaxtyping import (
 )
 
 from ..agents.interface import AgentInterface, AgentState, Genotype, Body
+from .utils import (
+	f16, f32, i8, i16, i32, i64, ui8, ui16, ui32,
+	MAX_INT16, boolean_maxpool, convolve,
+	neighbor_states_fn, moore_neighborhood, k_neighborhood
+)
 
 # ======================== UTILS =============================
-
-from .utils import *
 
 type FoodMap = Bool[Array, "F H W"]
 type KeyArray = jax.Array
@@ -68,6 +71,16 @@ def make_growth_convolution(env_size: tuple[int,int],
 def make_chemical_diffusion_convolution(env_size: tuple[int,int],
 										diffusion_rates: jax.Array,
 										flow: jax.Array|None=None):
+	"""Creates convolution function for chemical diffusion
+	
+	Args:
+		env_size: tuple[int,int]
+		diffusion_rates: jax.Array
+		flow: jax.Array|None
+	
+	Returns:
+		Callable[[jax.Array], jax.Array]
+	"""
 	# ---
 	H, W = env_size
 	# ---
@@ -86,6 +99,7 @@ def make_chemical_diffusion_convolution(env_size: tuple[int,int],
 		cosines = (cosines+1.0) * 0.5
 		diffusion_kernels = jnp.exp(-D / ( cosines * diffusion_rates[:,None,None] * flow_norm + (1-cosines)*0.1))
 
+	diffusion_kernels = jnp.where(jnp.isnan(diffusion_kernels), 1.0, diffusion_kernels) #FIX THIS 
 	diffusion_kernels = diffusion_kernels / jnp.sum(diffusion_kernels, axis=(1,2), keepdims=True) #normalize kernels
 	
 	diffusion_kernels_fft = jnp.fft.fft2(jnp.fft.fftshift(diffusion_kernels, axes=(1,2)))

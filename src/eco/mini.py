@@ -1,7 +1,5 @@
 import jax
 from jax import numpy as jnp, random as jr, nn as jnn
-import equinox as eqx
-import equinox.nn as nn
 from flax.struct import PyTreeNode
 from jaxtyping import Float
 
@@ -119,9 +117,6 @@ class Gather(MiniEnv):
 	def evaluate(self, params: PolicyParams, key: jax.Array) -> tuple[Float, dict]:
 		states: GatherState = self.rollout(params, 32, key)
 		return -jnp.sum(states.food[-1]), {}
-
-
-
 
 
 class ChemotaxisEnv(MiniEnv):

@@ -9,6 +9,7 @@ from typing import NamedTuple, Callable
 class NN(PyTreeNode):
 	v: jax.Array
 	W: jax.Array
+	b: jax.Array
 	# ---
 	mask: jax.Array
 
