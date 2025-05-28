@@ -17,12 +17,13 @@ class CiliatedMotorState(struct.PyTreeNode):
 class CiliatedMotorInterface(MotorInterface):
 	#-------------------------------------------------------------------
 	dt: float=1.0
-	border_size: float=0.9
+	border_size: float=0.2
 	max_neuron_force: float=0.2
 	neuron_force_gain: float=0.2
 	max_angular_speed: float=jnp.pi/4
 	max_velocity: float=10.0
 	motor_energy_cost: float=0.1
+	motor_expression_threshold: float=0.9
 	#-------------------------------------------------------------------
 
 	def init(self, policy_state: PolicyState, key: jax.Array) -> CiliatedMotorState:
@@ -31,8 +32,9 @@ class CiliatedMotorInterface(MotorInterface):
 		assert hasattr(policy_state, "m") 
 		# ---
 		xs = policy_state.x
-		is_motor = policy_state.m[:,0] > 0.0
-		side_motors = is_motor & (jnp.abs(xs[:,0]) > 0.8)
+		threshold = 1-self.border_size
+		is_motor = (policy_state.m[:,0] > self.motor_expression_threshold) & (jnp.abs(xs).max(-1) > threshold)
+		side_motors = is_motor & (jnp.abs(xs[:,0]) > threshold)
 
 		return CiliatedMotorState(is_motor, side_motors)
 
@@ -74,11 +76,3 @@ class CiliatedMotorInterface(MotorInterface):
 		return body.replace(pos=new_pos, heading=new_heading)
 	#-------------------------------------------------------------------
 
-
-if __name__ == '__main__':
-	
-	interface = BraitenbergMotorInterface(1.0, 0.1)
-	action = jnp.array([1.0,-1.0])
-	position = Body(jnp.zeros(2), jnp.array(jnp.pi), jnp.ones(()))
-	new_pos = interface.move(action, position)
-	print(new_pos)

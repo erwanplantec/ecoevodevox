@@ -1,8 +1,8 @@
 from .base import DevelopmentalModel
 from .model_e import Model_E
-from .grn import GRNEncoding
+from .rand import RAND
 
 encoding_models = {
-	"grn": GRNEncoding,
-	"mdl_e": Model_E
+	"rand": RAND,
+	"mdl_e": Model_E,
 }

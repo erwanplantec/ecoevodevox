@@ -1,29 +1,27 @@
-seed: 0
-log: False
-ckpt_dir: 
+seed: 10
+log: true
+ckpt_dir:
 ckpt_freq: 1_000
-project: "eedx_debug"
+project: "eedx"
 run_name: ""
-debug: true
-flow: [1,0]
 
 
 # ===== env =====
 
 env:
-  size: [32,32]
-  max_agents: 32
-  init_agents: 16
-  birth_pool_size: 8
+  size: [256,256]
+  max_agents: 8192
+  init_agents: 256
+  birth_pool_size: 128
   max_age: 2000
   reproduction_cost: 0.5
   max_energy: 50.0
   initial_energy: 1.0
-  time_above_threshold_to_reproduce: 100
+  time_above_threshold_to_reproduce: 80
   time_below_threshold_to_die: 50
   chemicals_detection_threshold: 0.001
-  walls_density: 0.0001
-  wall_effect: "kill"
+  walls_density: 0.0
+  wall_effect: "none"
 
 # ===== agents =====
 
@@ -31,15 +29,19 @@ agents:
 
   size: 3.0
   body_resolution:
-  basal_energy_loss: 0.1
+  basal_energy_loss: 1.0
 
   motor:
     which: "braitenberg"
     radius: 1.5
-  
+    max_speed: 10.0
+    wheel_speed_gain: 0.5
+    motor_energy_cost: 0.1
+    max_distance_to_motor: 0.75
+
   sensory:
     which: "spatially_embedded"
-  
+
   nn:
     which: "rnn"
 
@@ -59,36 +61,25 @@ agents:
 
   mutation:
     which: "generalized"
-    sigma: 0.01
+    sigma: 0.03
     p_mut: 0.01
 
 # ===== chem types =====
 
-ct-1: 
+ct-1:
   diffusion_rate: 1.0
-
-ct-2:
-  diffusion_rate: 0.1
 
 # ===== food types =====
 
 ft-1:
-  growth_rate: 0.01
+  growth_rate: 0.0
   dmin: 1
-  dmax: 2
+  dmax: 1
   chemical_signature: 0
   energy_concentration: 1.0
-  spontaneous_grow_prob: 0.0
-  initial_density: 1.0
+  spontaneous_grow_prob: 0.08
+  initial_density: 0.1
 
-ft-2:
-  growth_rate: 0.01
-  dmin: 15
-  dmax: 16
-  chemical_signature: 1
-  energy_concentration: 1.0
-  spontaneous_grow_prob: 0.0
-  initial_density: 1.0
 
 
 

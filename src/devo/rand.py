@@ -277,9 +277,13 @@ class RAND(DevelopmentalModel):
         X = state.X
         if self.network_type=="ctrnn":
             tau, gain, bias = S_neurons
+            tau = jnp.clip(1.0-jnn.sigmoid(tau*5.0), 0.001)
+            gain = jnp.clip(1.0-jnn.sigmoid(gain*5.0), 0.01)
+            bias = bias*5.0
             return CTRNNState(v=v, W=W, mask=mask, x=X, s=sensory, m=motor, tau=tau, gain=gain, b=bias)
+        
         elif self.network_type=="rnn":
-            bias = S_neurons
+            bias = S_neurons*5.0
             return RNNState(v=v, W=W, mask=mask, x=X, s=sensory, m=motor, b=bias)
     # ---
     def __call__(self, key: jax.Array)->Network:
@@ -305,6 +309,4 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     mdl = RAND(nb_neurons=1, network_type="rnn", key=jr.key(2))
     net = mdl(jr.key(2))
-    plt.scatter(*net.x.T)
-    plt.show()
-
+    print(jax.tree.map(lambda x: x.shape, net))

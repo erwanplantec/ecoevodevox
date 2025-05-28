@@ -2,20 +2,21 @@ import matplotlib.pyplot as plt
 import jax.numpy as jnp
 from sklearn.decomposition import PCA
 
-def render_network(network, ax=None, node_colors=None, wcmap="coolwarm"):
+def render_network(network, node_colors=None, ax=None, wcmap="coolwarm"):
     
     x = network.x
     W = network.W
     mask = network.mask
-    id_ = network.id_
 
     cm = plt.cm.get_cmap(wcmap)
     
     if ax is None:
         fig, ax = plt.subplots(1,1)
         
-    node_colors = plt.cm.Set1(id_)[network.mask.astype(bool)] if node_colors is None else node_colors[network.mask.astype(bool)] #type:ignore
-    ax.scatter(*network.x[mask.astype(bool)].T, c=node_colors, s=100)#type:ignore
+    if node_colors is None:
+        node_colors = jnp.ones(network.mask.shape[0])
+    node_colors = node_colors[network.mask.astype(bool)] 
+    ax.scatter(*network.x[mask.astype(bool)].T, c=node_colors, s=100)
     ax.set_xlim(-1.1,1.1)#type:ignore
     ax.set_ylim(-1.1,1.1)#type:ignore
 
