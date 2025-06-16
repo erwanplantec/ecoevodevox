@@ -41,6 +41,7 @@ class RAND(DevelopmentalModel):
     W_migr: jax.Array
     W_pert: jax.Array
     W_syn: jax.Array
+    W_neur: nn.Linear|None
     bias: jax.Array
     tau: jax.Array
     O_syn: jax.Array
@@ -61,7 +62,7 @@ class RAND(DevelopmentalModel):
     def __init__(self, nb_neurons=1, max_neurons=128, regulatory_genes=8, migratory_genes=4, perturbation_genes=2, sensory_genes=1, motor_genes=1,
                  synaptic_genes=4, synaptic_proteins=4, max_mitosis=10, mitotic_factor_threshold=10.0, death_factor_threshold=10.0, 
                  communication_fields=8, nb_synaptic_rules=1, grn_model="continuous", autonomous_decay=True, dev_iters=400,
-                 network_type="ctrnn", *, key: jax.Array):
+                 neuron_params_genes=1, network_type="ctrnn", *, key: jax.Array):
         """Initialize the RAND (Regulation based Neural Development) model.
         
         Args:
@@ -96,21 +97,21 @@ class RAND(DevelopmentalModel):
             jnp.zeros(1), #death
             jnp.zeros(regulatory_genes), # regulatory
             jnp.zeros(sensory_genes), # sensory
-            jnp.zeros(motor_genes) # motor
+            jnp.zeros(motor_genes), # motor
+            jnp.zeros(neuron_params_genes)
         ]
 
-        if network_type=="ctrnn":
-            genome_compartments.append(
-                (jnp.zeros(()), jnp.zeros(()), jnp.zeros(()))
-            )
-        elif network_type=="rnn":
-            genome_compartments.append(jnp.zeros(()))
 
         genome, self.genes_shaper = ravel_pytree(genome_compartments)
         total_genes = len(genome)
         self.total_genes = total_genes
         
-        kin, kex, kmigr, kpert, kbias, ksyn, kosyns, ktau = jr.split(key, 8)
+        kin, kex, kmigr, kpert, kbias, ksyn, kosyns, ktau, kneur = jr.split(key, 9)
+
+        if network_type=="ctrnn":
+            self.W_neur = nn.Linear(neuron_params_genes, 3, key=kneur)
+        elif network_type=="rnn":
+            self.W_neur = nn.Linear(neuron_params_genes, "scalar", key=kneur)
         
         scale = jnp.sqrt(1/total_genes)
         self.W_in = nn.Linear(total_genes, total_genes, key=kin, use_bias=False)
@@ -251,7 +252,11 @@ class RAND(DevelopmentalModel):
         state = state.replace(X=X, S=S)
 
         return state, {"state": state, "nb_mitotic": nb_mitotic, "mitotic": mitotic, "population": state.mask.sum()}
-    # --
+    # ---
+    def do_migration(self, state: RANDState, key: jax.Array)->tuple[RANDState,RANDState]:
+        state, states = jax.lax.scan(lambda s, k: self.step(s, k), state, jr.split(key, self.dev_iters))
+        return state, states
+    # ---
     def make_network(self, state: RANDState)->Network:
         """Create a neural network from the current developmental state.
         
@@ -266,7 +271,8 @@ class RAND(DevelopmentalModel):
                     parameters and structure.
         """
         _, _, _, S_syn, *_, S_sensory, S_motor, S_neurons = jax.vmap(self.genes_shaper)(state.S)
-        get_weigth = lambda O: S_syn@O@S_syn.T
+        synaptic_proteins = S_syn@self.W_syn
+        get_weigth = lambda O: synaptic_proteins@O@synaptic_proteins.T
         W = jax.vmap(get_weigth)(self.O_syn).sum(0)
         W = jnp.where(state.mask[None]*state.mask[:,None], W, 0.)
         W = jnp.where(jnp.abs(W)>1e-3, W, 0.)
@@ -276,14 +282,13 @@ class RAND(DevelopmentalModel):
         mask = state.mask
         X = state.X
         if self.network_type=="ctrnn":
-            tau, gain, bias = S_neurons
-            tau = jnp.clip(1.0-jnn.sigmoid(tau*5.0), 0.001)
-            gain = jnp.clip(1.0-jnn.sigmoid(gain*5.0), 0.01)
-            bias = bias*5.0
+            tau, gain, bias = jax.vmap(self.W_neur)(S_neurons).T
+            tau = jnp.clip(tau, 0.01)
+            gain = jnp.clip(gain, 0.01)
             return CTRNNState(v=v, W=W, mask=mask, x=X, s=sensory, m=motor, tau=tau, gain=gain, b=bias)
         
         elif self.network_type=="rnn":
-            bias = S_neurons*5.0
+            bias = jax.vmap(self.W_neur)(S_neurons)
             return RNNState(v=v, W=W, mask=mask, x=X, s=sensory, m=motor, b=bias)
     # ---
     def __call__(self, key: jax.Array)->Network:
@@ -300,9 +305,9 @@ class RAND(DevelopmentalModel):
         Returns:
             Network: The final neural network after development.
         """
-        key_init, key_scan = jr.split(key)
+        key_init, key_migr = jr.split(key)
         state = self.init(key_init)
-        state = jax.lax.scan(lambda s, k: self.step(s, k), state, jr.split(key_scan, self.dev_iters))[0]
+        state, _ = self.do_migration(state, key_migr)
         return self.make_network(state)
     
 if __name__ == "__main__":
