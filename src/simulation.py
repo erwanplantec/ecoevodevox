@@ -95,14 +95,17 @@ def init_agents_interface(cfg: dict, key: jax.Array):
 	enc_cfg = cfg["agents"]["encoding"]
 	cls = encoding_models.get(enc_cfg['which'], None); assert cls is not None, f"encoding model {enc_cfg['which']} is not valid"
 	kwargs = {k:v for k,v in enc_cfg.items() if k !="which"}
-	encoding_model: DevelopmentalModel = cls(**kwargs, key=key)
+	encoding_fctry = lambda key: cls(**kwargs, key=key)
+	encoding_model: DevelopmentalModel = encoding_fctry(key)
 
 	# ---
 
 	nn_cfg = cfg["agents"]["nn"]
 	cls = nn_models.get(nn_cfg["which"], None); assert cls is not None, f"nn model {nn_cfg['which']} is not valid"
 	kwargs = {k:v for k,v in nn_cfg.items() if k !="which"}
-	policy: Policy = cls(encoding_model=encoding_model, **kwargs)
+	policy_fctry = lambda key: cls(encoding_model=encoding_fctry(key), **kwargs)
+	prms_fctry = lambda key: eqx.filter(policy_fctry(key), eqx.is_array)
+	policy: Policy = policy_fctry(key)
 	policy_prms, _ = eqx.partition(policy, eqx.is_array)
 	policy_apply, policy_init = make_apply_init(policy, reshape_prms=False)
 
@@ -123,7 +126,7 @@ def init_agents_interface(cfg: dict, key: jax.Array):
 
 	interface = AgentInterface(policy_apply=policy_apply,
 							   policy_init=policy_init,
-							   policy_fctry=policy_fctry,
+							   policy_fctry=prms_fctry,
 							   sensory_interface=sensory_interface,
 							   motor_interface=motor_interface,
 							   body_resolution=cfg["agents"]["body_resolution"],

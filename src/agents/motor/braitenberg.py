@@ -70,7 +70,7 @@ class BraitenbergMotorInterface(MotorInterface):
 			r = radius * (vl+vr) / (vr-vl)
 			icc = pos + jnp.array([-r*jnp.sin(heading),r*jnp.cos(heading)], dtype=pos.dtype)
 			omega = (vr-vl)/l
-			omega = omega*self.dt
+			omega = omega * self.dt
 			rotation_matrix = jnp.array([[jnp.cos(omega), -jnp.sin(omega)],
 										 [jnp.sin(omega),  jnp.cos(omega)]], dtype=pos.dtype)
 			pos = rotation_matrix @ (pos-icc) + icc
@@ -78,7 +78,7 @@ class BraitenbergMotorInterface(MotorInterface):
 			return Body(pos, heading, body.size)
 
 		def _if_equal(pos, heading, vr, vl):
-			pos = pos + vr*jnp.array([jnp.cos(heading), jnp.sin(heading)], dtype=pos.dtype)
+			pos = pos + vr*jnp.array([jnp.cos(heading), jnp.sin(heading)], dtype=pos.dtype) * self.dt
 			return Body(pos, heading, body.size)
 
 		pos, heading = body.pos, body.heading
