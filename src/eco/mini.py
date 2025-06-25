@@ -43,7 +43,7 @@ class MiniEnv:
 		action, agent_state, _ = self.agent_interface.step(obs, state.agent_state, key)
 		new_body = self.agent_interface.move(action, agent_state.body)
 		new_body = new_body.replace(
-			pos = jnp.mod(new_body.pos, jnp.asarray(self.grid_size))
+			pos = jnp.clip(new_body.pos, 0, jnp.asarray(self.grid_size)-0.0001)
 		)
 		agent_state = agent_state.replace(body=new_body)
 		return state.replace(agent_state=agent_state)

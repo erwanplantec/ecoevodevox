@@ -22,7 +22,7 @@ class RANDState(PyTreeNode):
     X: jax.Array
     mask: jax.Array
     mitotic_factors: jax.Array
-    death_factors: jax.Array
+    apoptosis_factors: jax.Array
 
 class RNNState(SERNN):
 	s: jax.Array
@@ -39,7 +39,7 @@ class RAND(DevelopmentalModel):
     W_in: nn.Linear
     W_ex: nn.Linear
     W_migr: jax.Array
-    W_pert: jax.Array
+    W_sign: jax.Array
     W_syn: jax.Array
     W_neur: nn.Linear|None
     bias: jax.Array
@@ -52,17 +52,20 @@ class RAND(DevelopmentalModel):
     total_genes: int
     max_mitosis: int
     mitotic_factor_threshold: float
-    death_factor_threshold: float
-    communication_fields: int
+    apoptosis_factor_threshold: float
+    signalling_proteins: int
     grn_model: str
     autonomous_decay: bool
     dev_iters: int
     network_type: str
+    expression_bounds: tuple[float, float]
+    motor_activation_fn: callable
+    sensory_activation_fn: callable
     # ---
-    def __init__(self, nb_neurons=1, max_neurons=128, regulatory_genes=8, migratory_genes=4, perturbation_genes=2, sensory_genes=1, motor_genes=1,
-                 synaptic_genes=4, synaptic_proteins=4, max_mitosis=10, mitotic_factor_threshold=10.0, death_factor_threshold=10.0, 
-                 communication_fields=8, nb_synaptic_rules=1, grn_model="continuous", autonomous_decay=True, dev_iters=400,
-                 neuron_params_genes=1, network_type="ctrnn", *, key: jax.Array):
+    def __init__(self, nb_neurons=1, max_neurons=128, regulatory_genes=8, migratory_genes=4, signalling_genes=2, sensory_genes=1, motor_genes=1,
+                 synaptic_genes=4, synaptic_proteins=4, signalling_proteins=4, max_mitosis=10, mitotic_factor_threshold=10.0, apoptosis_factor_threshold=10.0, 
+                 nb_synaptic_rules=1, grn_model="continuous", autonomous_decay=True, dev_iters=400,
+                 neuron_params_genes=1, network_type="ctrnn", expression_bounds=(0.0, 1.0), motor_activation_fn=lambda x:x, sensory_activation_fn=lambda x:x, *, key: jax.Array):
         """Initialize the RAND (Regulation based Neural Development) model.
         
         Args:
@@ -77,7 +80,7 @@ class RAND(DevelopmentalModel):
             synaptic_proteins (int): Number of synaptic proteins. Defaults to 4.
             max_mitosis (int): Maximum number of mitosis events per step. Defaults to 10.
             mitotic_factor_threshold (float): Threshold for mitosis activation. Defaults to 10.0.
-            death_factor_threshold (float): Threshold for cell death. Defaults to 10.0.
+            apoptosis_factor_threshold (float): Threshold for cell death. Defaults to 10.0.
             communication_fields (int): Number of communication fields. Defaults to 8.
             nb_synaptic_rules (int): Number of synaptic rules. Defaults to 1.
             grn_model (str): Type of gene regulatory network model. Defaults to "continuous".
@@ -88,18 +91,18 @@ class RAND(DevelopmentalModel):
         """
         self.nb_neurons = nb_neurons
 
-        genome_compartments = [
-            jnp.zeros(1), # speed
-            jnp.zeros(migratory_genes), # migr fields
-            jnp.zeros(perturbation_genes), # pert fields
-            jnp.zeros(synaptic_genes), # syn fields
-            jnp.zeros(1), #mitosis
-            jnp.zeros(1), #death
-            jnp.zeros(regulatory_genes), # regulatory
-            jnp.zeros(sensory_genes), # sensory
-            jnp.zeros(motor_genes), # motor
-            jnp.zeros(neuron_params_genes)
-        ]
+        genome_compartments = {
+            "speed": jnp.zeros(1), # speed
+            "migratory": jnp.zeros(migratory_genes), # migr fields
+            "signalling": jnp.zeros(signalling_genes), # pert fields
+            "synaptic": jnp.zeros(synaptic_genes), # syn fields
+            "mitosis": jnp.zeros(1), #mitosis
+            "apoptosis": jnp.zeros(1), #apoptosis
+            "regulatory": jnp.zeros(regulatory_genes), # regulatory
+            "sensory": jnp.zeros(sensory_genes), # sensory
+            "motor": jnp.zeros(motor_genes), # motor
+            "neuron_params": jnp.zeros(neuron_params_genes)
+        }
 
 
         genome, self.genes_shaper = ravel_pytree(genome_compartments)
@@ -113,26 +116,28 @@ class RAND(DevelopmentalModel):
         elif network_type=="rnn":
             self.W_neur = nn.Linear(neuron_params_genes, "scalar", key=kneur)
         
-        scale = jnp.sqrt(1/total_genes)
-        self.W_in = nn.Linear(total_genes, total_genes, key=kin, use_bias=False)
-        self.W_ex = nn.Linear(5+communication_fields, total_genes, key=kex, use_bias=True)
-        self.bias = jr.normal(kbias, (total_genes,))*scale
-        self.tau = jr.uniform(ktau, (total_genes,))
+        self.W_in = jr.uniform(kin, (total_genes, total_genes), minval=-1.0, maxval=1.0)
+        self.W_ex = jr.uniform(kex, (5+signalling_proteins, total_genes), minval=-1.0, maxval=1.0)
+        self.bias = jr.uniform(kbias, (total_genes,), minval=-1.0, maxval=1.0)
+        self.tau = jr.uniform(ktau, (total_genes,), minval=0.1, maxval=1.0)
         
-        self.W_migr = jr.normal(kmigr, (migratory_genes,communication_fields+5))*0.1
-        self.W_pert = jr.normal(kpert, (perturbation_genes,communication_fields))*0.1
+        self.W_migr = jr.normal(kmigr, (migratory_genes,signalling_proteins+5))
+        self.W_sign = jr.normal(kpert, (signalling_genes,signalling_proteins))
         
-        self.W_syn = jr.normal(ksyn, (synaptic_genes,synaptic_proteins))*0.1
-        self.O_syn = jr.normal(kosyns, (nb_synaptic_rules,synaptic_proteins,synaptic_proteins))*0.1
+        self.W_syn = jr.normal(ksyn, (synaptic_genes,synaptic_proteins))
+        self.O_syn = jr.normal(kosyns, (nb_synaptic_rules,synaptic_proteins,synaptic_proteins))
         self.max_mitosis = max_mitosis
         self.max_neurons = max_neurons
         self.mitotic_factor_threshold = mitotic_factor_threshold
-        self.death_factor_threshold = death_factor_threshold
-        self.communication_fields = communication_fields
+        self.apoptosis_factor_threshold = apoptosis_factor_threshold
+        self.signalling_proteins = signalling_proteins
         self.grn_model = grn_model
         self.autonomous_decay = autonomous_decay
         self.dev_iters = dev_iters
         self.network_type = network_type
+        self.expression_bounds = expression_bounds
+        self.motor_activation_fn = motor_activation_fn
+        self.sensory_activation_fn = sensory_activation_fn
     # ---
     def init(self, key: jax.Array)->RANDState:
         """Initialize the state of the RAND model.
@@ -151,8 +156,8 @@ class RAND(DevelopmentalModel):
             X = jr.normal(key, (self.max_neurons, 2))*0.01
         mask = jnp.arange(self.max_neurons) < self.nb_neurons
         mitotic_factors = jnp.zeros((self.max_neurons,))
-        death_factors = jnp.zeros((self.max_neurons,))
-        return RANDState(S, X, mask, mitotic_factors, death_factors)
+        apoptosis_factors = jnp.zeros((self.max_neurons,))
+        return RANDState(S, X, mask, mitotic_factors, apoptosis_factors)
     # ---
     def step(self, state: RANDState, key: jax.Array)->RANDState:
         """Perform one step of development in the RAND model.
@@ -173,19 +178,19 @@ class RAND(DevelopmentalModel):
                 - Dictionary with additional information about the step
         """
          # --- Mitosis and death step
-        _, _, _, _, S_mitosis, S_death, *_ = jax.vmap(self.genes_shaper)(state.S)
-        death_gene_active = (S_death>0.9).squeeze(-1)     & state.mask
-        mitotic_gene_active = (S_mitosis>0.9).squeeze(-1) & state.mask
+        genes = jax.vmap(self.genes_shaper)(state.S)
+        apoptosis_gene_active = (genes["apoptosis"]>0.9).squeeze(-1) & state.mask
+        mitotic_gene_active = (genes["mitosis"]>0.9).squeeze(-1) & state.mask
         mitotic_factors = jnp.clip(
             jnp.where(mitotic_gene_active, state.mitotic_factors+1, 0), 0, self.mitotic_factor_threshold+1
         )
-        death_factors = jnp.clip(
-            jnp.where(death_gene_active, state.death_factors+1, 0), 0, self.death_factor_threshold+1
+        apoptosis_factors = jnp.clip(
+            jnp.where(apoptosis_gene_active, state.apoptosis_factors+1, 0), 0, self.apoptosis_factor_threshold+1
         )
-        state = state.replace(mitotic_factors=mitotic_factors, death_factors=death_factors)
+        state = state.replace(mitotic_factors=mitotic_factors, apoptosis_factors=apoptosis_factors)
 
-        dead = death_factors > self.death_factor_threshold
-        death_factors = jnp.where(dead, 0., death_factors)
+        dead = apoptosis_factors > self.apoptosis_factor_threshold
+        apoptosis_factors = jnp.where(dead, 0., apoptosis_factors)
         mask = jnp.where(dead, False, state.mask)
         state = state.replace(mask=mask)
 
@@ -214,27 +219,30 @@ class RAND(DevelopmentalModel):
                              lambda s, *_: (s, 0), 
                              state, mitotic, key)
         
-        _, _, S_pert, *_ = jax.vmap(self.genes_shaper)(state.S) #N, m
-        zetas = S_pert@self.W_pert
+        genes = jax.vmap(self.genes_shaper)(state.S) #N, m
+        signals = genes["signalling"]@self.W_sign
         def M_(x):
             dists = jnp.square(x[None]-state.X).sum(-1) # N,
             concentrations = jnp.exp(-dists/0.005) # N, 
-            perts = jnp.sum(concentrations[:,None] * zetas * state.mask[:,None], axis=0)
+            perts = jnp.sum(concentrations[:,None] * signals * state.mask[:,None], axis=0)
             return jnp.concatenate([M(x),perts])
         # --- GRN step
-        I = jnn.sigmoid(jax.vmap(M_)(state.X))
-        inp = jax.vmap(self.W_ex)(I)
+        I = jax.vmap(M_)(state.X)
+        inp_ex = I@self.W_ex
+        inp_in = state.S@self.W_in
+
         if self.grn_model == "continuous":
-            dS = jnn.tanh(jax.vmap(self.W_in)(state.S) + inp + self.bias)
+            dS = jnn.tanh(inp_in + inp_ex + self.bias)
             if self.autonomous_decay:
                 dS = dS - state.S
             dS = dS / self.tau[None]
-            S = jnp.clip(state.S + 0.03 * dS, -1.0, 1.0)
+            S = jnp.clip(state.S + 0.03 * dS, self.expression_bounds[0], self.expression_bounds[1])
             S = jnp.where(state.mask[:,None], S, 0.)
         else:
-            S = heaviside(jax.vmap(self.W_in)(state.S) + inp + self.bias)
+            S = heaviside(inp_in + inp_ex + self.bias)
         # --- Migration step
-        S_mvt, S_migr, S_pert, *_ = jax.vmap(self.genes_shaper)(state.S)
+        genes = jax.vmap(self.genes_shaper)(state.S)
+        S_mvt, S_migr = genes["speed"], genes["migratory"]
         
         lambda_ = S_migr@self.W_migr
         
@@ -242,8 +250,8 @@ class RAND(DevelopmentalModel):
         def energy_fn(x, lambda_):
             return jnp.sum(lambda_*M_(x), axis=-1)
         
-        vel = jnn.sigmoid(S_mvt*5)
-        dX = jax.vmap(energy_fn)(state.X, lambda_)
+        vel = S_mvt
+        dX = -jax.vmap(energy_fn)(state.X, lambda_)
         dX = jnp.clip(dX, -1., 1.)
         
         X = jnp.clip(state.X + 0.05*dX*vel, -1., 1.)
@@ -270,14 +278,15 @@ class RAND(DevelopmentalModel):
             Network: Either a CTRNNState or RNNState containing the neural network
                     parameters and structure.
         """
-        _, _, _, S_syn, *_, S_sensory, S_motor, S_neurons = jax.vmap(self.genes_shaper)(state.S)
+        genes = jax.vmap(self.genes_shaper)(state.S)
+        S_syn, S_sensory, S_motor, S_neurons = genes["synaptic"], genes["sensory"], genes["motor"], genes["neuron_params"]
         synaptic_proteins = S_syn@self.W_syn
         get_weigth = lambda O: synaptic_proteins@O@synaptic_proteins.T
         W = jax.vmap(get_weigth)(self.O_syn).sum(0)
         W = jnp.where(state.mask[None]*state.mask[:,None], W, 0.)
         W = jnp.where(jnp.abs(W)>1e-3, W, 0.)
-        sensory = jnn.sigmoid(S_sensory*5.0)
-        motor = jnn.sigmoid(S_motor*5.0)
+        sensory = self.sensory_activation_fn(S_sensory)
+        motor = self.motor_activation_fn(S_motor)
         v = jnp.zeros((self.max_neurons,))
         mask = state.mask
         X = state.X

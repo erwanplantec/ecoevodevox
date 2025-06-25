@@ -21,6 +21,7 @@ class BraitenbergMotorInterface(MotorInterface):
 	max_speed: float=1.0
 	wheel_speed_gain: float=0.1
 	motor_energy_cost: float=0.1
+	max_neuron_force: float=1.0
 	#-------------------------------------------------------------------
 
 	def init(self, policy_state: PolicyState, key: jax.Array) -> BraitenbergMotorState:
@@ -43,11 +44,11 @@ class BraitenbergMotorInterface(MotorInterface):
 
 	def decode(self, policy_state: PolicyState, motor_state: BraitenbergMotorState) -> tuple[Action, Float, MotorState, Info]:
 		
-		left_motor_activations = jnp.where(motor_state.on_left_motor, policy_state.v, 0.0); assert isinstance(left_motor_activations, jax.Array)
-		left_motor_activation = left_motor_activations.sum()
+		left_motor_activations = jnp.where(motor_state.on_left_motor, policy_state.v*policy_state.m, 0.0); assert isinstance(left_motor_activations, jax.Array)
+		left_motor_activation = jnp.clip(left_motor_activations, -self.max_neuron_force, self.max_neuron_force).sum()
 
-		right_motor_activations = jnp.where(motor_state.on_right_motor, policy_state.v, 0.0); assert isinstance(right_motor_activations, jax.Array)
-		right_motor_activation = right_motor_activations.sum()
+		right_motor_activations = jnp.where(motor_state.on_right_motor, policy_state.v*policy_state.m, 0.0); assert isinstance(right_motor_activations, jax.Array)
+		right_motor_activation = jnp.clip(right_motor_activations, -self.max_neuron_force, self.max_neuron_force).sum()
 
 		left_wheel_speed = jnp.clip(left_motor_activation*self.wheel_speed_gain, -self.max_speed, self.max_speed)
 		right_wheel_speed = jnp.clip(right_motor_activation*self.wheel_speed_gain, -self.max_speed, self.max_speed)
