@@ -5,6 +5,10 @@ from jax import numpy as jnp, random as jr, nn as jnn
 import equinox as eqx
 import equinox.nn as nn
 from typing import Callable
+from flax.struct import PyTreeNode
+
+class State(PyTreeNode):
+	is_sensor: bool
 
 class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 	"""A sensory interface that processes spatial information from the environment.
@@ -22,7 +26,7 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 	#-------------------------------------------------------------------
 	sensor_expression_threshold: float=0.03
 	sensor_activation: Callable=jax.nn.tanh
-	border_threshold: float=0.9
+	border_threshold: float=0.0
 	#-------------------------------------------------------------------
 	def sensory_expression(self, policy_state):
 		"""Process the sensory expression from the policy state.
@@ -67,7 +71,8 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 		xs = policy_state.x
 		s = self.sensory_expression(policy_state)
 		# ---
-		C = obs.chemicals # mC,W,W
+		C = obs.chemicals # mC, W, W
+	
 		W = obs.walls
 		mC, D, _ = C.shape
 
@@ -79,7 +84,7 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 
 		Ic = jnp.where(on_border, jnp.sum(C[:,i,j].T * s[:,:mC], axis=1), 0.0) # chemical input #type:ignore
 		Iw = jnp.where(on_border, jnp.sum(W[:,i,j].T * s[:,mC:mC+1], axis=1), 0.0) # walls input #type:ignore
-		Ii = jnp.sum(s[:, mC+1:] * obs.internal, axis=1) # internal input #type:ignore
+		Ii = jnp.sum(s[:, mC+1:] * obs.internal[None], axis=1) # internal input #type:ignore
 
 		I = Ic + Iw + Ii
 

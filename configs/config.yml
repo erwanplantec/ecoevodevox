@@ -1,5 +1,5 @@
 seed: 10
-log: true
+log: false
 ckpt_dir:
 ckpt_freq: 1_000
 project: "eedx"
@@ -9,6 +9,8 @@ run_name: ""
 
 ct-1:
   diffusion_rate: 1.0
+  is_sparse: true
+  emission_rate: 0.1
 
 # ===== food types =====
 
@@ -25,9 +27,9 @@ ft-1:
 # ===== env =====
 
 env:
-  size: [256,256]
-  max_agents: 8192
-  init_agents: 256
+  size: [128,128]
+  max_agents: 2048
+  init_agents: 64
   birth_pool_size: 128
   max_age: 2000
   reproduction_cost: 0.5
@@ -44,7 +46,7 @@ env:
 agents:
 
   size: 3.0
-  body_resolution:
+  body_resolution: 4
   basal_energy_loss: 1.0
 
   motor:
@@ -58,20 +60,22 @@ agents:
 
   sensory:
     which: "spatially_embedded"
+    sensor_expression_threshold: 0.9
+    border_threshold: 0.9
 
   nn:
-    which: "rnn"
+    which: "ctrnn"
 
   encoding:
     # --- mdl
     which: "rand"
     # --- prms
     nb_neurons: 1
-    max_neurons: 64
-    regulatory_genes: 8
+    max_neurons: 128
+    regulatory_genes: 4
     migratory_genes: 4
-    signalling_genes: 2
-    sensory_genes: 1
+    signalling_genes: 4
+    sensory_genes: 5
     motor_genes: 1
     synaptic_genes: 4
     nb_synaptic_rules: 4

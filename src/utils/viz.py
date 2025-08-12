@@ -16,7 +16,6 @@ def render_network(network, node_colors=None, ax=None, wcmap="coolwarm"):
     if node_colors is None:
         node_colors = jnp.ones(network.mask.shape[0])
     node_colors = node_colors[network.mask.astype(bool)] 
-    ax.scatter(*network.x[mask.astype(bool)].T, c=node_colors, s=100)
     ax.set_xlim(-1.1,1.1)#type:ignore
     ax.set_ylim(-1.1,1.1)#type:ignore
 
@@ -33,6 +32,7 @@ def render_network(network, node_colors=None, ax=None, wcmap="coolwarm"):
             w = W_norm[i,j]
             alpha = min(max(float(w)*0.5, 0), 1.)
             ax.plot([xi,xj], [yi,yj], color=cm(float(w)), alpha=alpha)#type:ignore
+    ax.scatter(*network.x[mask.astype(bool)].T, c=node_colors, s=100)
 
 
 

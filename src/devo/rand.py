@@ -61,10 +61,12 @@ class RAND(DevelopmentalModel):
     expression_bounds: tuple[float, float]
     motor_activation_fn: callable
     sensory_activation_fn: callable
+    gene_noise_scale: float
+    position_noise_scale: float
     # ---
     def __init__(self, nb_neurons=1, max_neurons=128, regulatory_genes=8, migratory_genes=4, signalling_genes=2, sensory_genes=1, motor_genes=1,
                  synaptic_genes=4, synaptic_proteins=4, signalling_proteins=4, max_mitosis=10, mitotic_factor_threshold=10.0, apoptosis_factor_threshold=10.0, 
-                 nb_synaptic_rules=1, grn_model="continuous", autonomous_decay=True, dev_iters=400,
+                 nb_synaptic_rules=1, grn_model="continuous", autonomous_decay=True, dev_iters=400, gene_noise_scale=0.0, position_noise_scale=0.0,
                  neuron_params_genes=1, network_type="ctrnn", expression_bounds=(0.0, 1.0), motor_activation_fn=lambda x:x, sensory_activation_fn=lambda x:x, *, key: jax.Array):
         """Initialize the RAND (Regulation based Neural Development) model.
         
@@ -104,7 +106,6 @@ class RAND(DevelopmentalModel):
             "neuron_params": jnp.zeros(neuron_params_genes)
         }
 
-
         genome, self.genes_shaper = ravel_pytree(genome_compartments)
         total_genes = len(genome)
         self.total_genes = total_genes
@@ -138,6 +139,8 @@ class RAND(DevelopmentalModel):
         self.expression_bounds = expression_bounds
         self.motor_activation_fn = motor_activation_fn
         self.sensory_activation_fn = sensory_activation_fn
+        self.gene_noise_scale = gene_noise_scale
+        self.position_noise_scale = position_noise_scale
     # ---
     def init(self, key: jax.Array)->RANDState:
         """Initialize the state of the RAND model.
@@ -177,6 +180,7 @@ class RAND(DevelopmentalModel):
                 - Updated state
                 - Dictionary with additional information about the step
         """
+        key_mitosis, key_gene, key_position = jr.split(key, 3)
          # --- Mitosis and death step
         genes = jax.vmap(self.genes_shaper)(state.S)
         apoptosis_gene_active = (genes["apoptosis"]>0.9).squeeze(-1) & state.mask
@@ -217,7 +221,7 @@ class RAND(DevelopmentalModel):
         state, nb_mitotic = jax.lax.cond(has_free_space & jnp.any(mitotic), 
                              _mitosis, 
                              lambda s, *_: (s, 0), 
-                             state, mitotic, key)
+                             state, mitotic, key_mitosis)
         
         genes = jax.vmap(self.genes_shaper)(state.S) #N, m
         signals = genes["signalling"]@self.W_sign
@@ -232,7 +236,7 @@ class RAND(DevelopmentalModel):
         inp_in = state.S@self.W_in
 
         if self.grn_model == "continuous":
-            dS = jnn.tanh(inp_in + inp_ex + self.bias)
+            dS = jnn.tanh(inp_in + inp_ex + self.bias) + (jr.normal(key_gene, state.S.shape)*self.gene_noise_scale)
             if self.autonomous_decay:
                 dS = dS - state.S
             dS = dS / self.tau[None]
@@ -252,7 +256,7 @@ class RAND(DevelopmentalModel):
         
         vel = S_mvt
         dX = -jax.vmap(energy_fn)(state.X, lambda_)
-        dX = jnp.clip(dX, -1., 1.)
+        dX = jnp.clip(dX, -1., 1.) + (jr.normal(key_position, dX.shape)*self.position_noise_scale)
         
         X = jnp.clip(state.X + 0.05*dX*vel, -1., 1.)
         X = jnp.where(state.mask[:,None], X, 0.)

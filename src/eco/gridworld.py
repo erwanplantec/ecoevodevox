@@ -117,6 +117,8 @@ def make_chemical_diffusion_convolution(env_size: tuple[int,int],
 
 class ChemicalType(PyTreeNode):
 	diffusion_rate: Float16
+	is_sparse: Bool
+	emission_rate: Float16
 
 class FoodType(PyTreeNode):
 	growth_rate: Float32
@@ -142,26 +144,27 @@ class Observation(PyTreeNode):
 
 class GridworldConfig(PyTreeNode):
 	# ---
-	size: tuple[int,int]=(256,256)
+	size: tuple[int,int]=(256,256)  # Grid dimensions (height, width)
 	# ---
-	walls_density: float=1e-4
-	wall_effect: Literal["kill","penalize","none"]="kill"
+	walls_density: float=1e-4  # Probability of wall placement at each grid cell
+	wall_effect: Literal["kill","penalize","none"]="kill"  # What happens when agents hit walls
+	wall_penalty: float=1.0  # Penalty for hitting walls
 	# ---
-	max_agents: int=10_000
-	init_agents: int=1_024
-	max_age: int=1_000
+	max_agents: int=10_000  # Maximum number of agents that can exist simultaneously
+	init_agents: int=1_024  # Initial number of agents at environment start
+	max_age: int=1_000  # Maximum age before agents die of old age
 	# ---
-	reproduction_cost: float=0.5
-	max_energy: float=50.0
-	initial_energy: float=1.0
-	time_above_threshold_to_reproduce: int=100
-	time_below_threshold_to_die: int=30
+	reproduction_cost: float=0.5  # Energy cost for reproducing
+	max_energy: float=50.0  # Maximum energy an agent can have
+	initial_energy: float=1.0  # Starting energy for new agents
+	time_above_threshold_to_reproduce: int=100  # Time steps above energy threshold needed to reproduce
+	time_below_threshold_to_die: int=30  # Time steps below energy threshold before death
 	# ---
-	chemicals_detection_threshold: float=1e-3
+	chemicals_detection_threshold: float=1e-3  # Minimum chemical concentration for detection
 	# ---
-	birth_pool_size: int=256
+	birth_pool_size: int=256  # Size of pool for managing births
 	# ---
-	flow: jax.Array|tuple[float,float]|None=None
+	flow: jax.Array|tuple[float,float]|None=None  # Environmental flow field affecting chemical diffusion
 
 #=======================================================================
 
@@ -172,19 +175,15 @@ class GridWorld:
 	def __init__(
 		self, 
 		cfg: GridworldConfig,
-		# ---
 		agent_interface: AgentInterface,
 		mutation_fn: Callable[[Genotype,jax.Array], Genotype],
-		# ---
 		chemical_types: ChemicalType,
 		food_types: FoodType, 
-		# --- 
 		*,
 		key: jax.Array):
 		
 		self.cfg = cfg
 		self.walls = jr.bernoulli(key, cfg.walls_density, cfg.size)
-
 		self.food_types = jax.tree.map(lambda x: x.astype(jnp.float16), food_types)
 		self.nb_food_types = food_types.growth_rate.shape[0]
 		self.growth_conv = make_growth_convolution(cfg.size, 
@@ -224,8 +223,8 @@ class GridWorld:
 		state = self._update_food(state, key_food)
 
 		# --- 2. Get and apply actions ---
-		key, key_step = jr.split(key)
-		observations = self._get_observations(state)
+		key, key_obs, key_step = jr.split(key, 3)
+		observations = self._get_observations(state, key_obs)
 		actions, agents_states, agents_step_data = jax.vmap(self.agent_interface.step)(
 			observations, state.agents_states, jr.split(key_step, self.cfg.max_agents)
 		)
@@ -447,11 +446,14 @@ class GridWorld:
 
 	#-------------------------------------------------------------------
 
-	def _compute_chemical_fields(self, state: EnvState)->jax.Array:
+	def _compute_chemical_fields(self, state: EnvState, key: jax.Array)->jax.Array:
 
 		chemical_source_fields = jnp.sum(state.food[:,None] * self.food_types.chemical_signature[...,None,None], axis=0)
-		chemical_fields = self.chemicals_diffusion_conv(chemical_source_fields)
-
+		chemical_fields = self.chemicals_diffusion_conv(chemical_source_fields) #C,H,W
+		chemical_fields = jnp.where(
+			self.chemical_types.is_sparse[:,None,None], 
+			jr.bernoulli(key, p=chemical_fields*self.chemical_types.emission_rate[...,None,None]).astype(jnp.float16), 
+			chemical_fields )
 		agents = state.agents_states
 		agents_i, agents_j = get_cell_index(agents.body.pos).T
 		agents_alive_grid = jnp.zeros(self.cfg.size).at[agents_i, agents_j].add(agents.alive)
@@ -464,13 +466,13 @@ class GridWorld:
 
 	#-------------------------------------------------------------------
 
-	def _get_observations(self, state: EnvState)->Observation:
+	def _get_observations(self, state: EnvState, key: jax.Array)->Observation:
 		"""
 		returns agents observations
 		"""
 		agents = state.agents_states
 
-		chemical_fields = self._compute_chemical_fields(state)
+		chemical_fields = self._compute_chemical_fields(state, key)
 
 		agents_chemicals_inputs = jax.vmap(self.vision_fn, in_axes=(None,0))(chemical_fields, agents.body)
 
@@ -503,7 +505,7 @@ class GridWorld:
 			agents_energy = agents.energy
 		elif self.cfg.wall_effect=="penalize":
 			agents_alive = agents.alive
-			agents_energy = jnp.where(hits_wall&agents.alive, agents.energy-10.0, agents.energy)
+			agents_energy = jnp.where(hits_wall&agents.alive, agents.energy-self.cfg.wall_penalty, agents.energy)
 		elif self.cfg.wall_effect=="none":
 			agents_alive = agents.alive
 			agents_energy = agents.energy
@@ -511,9 +513,9 @@ class GridWorld:
 			raise ValueError(f"wall effect {self.cfg.wall_effect} is not valid")
 
 		agents = agents.replace(
-			body 	 = new_positions,
-			alive    = agents_alive,
-			energy   = agents_energy
+			body   = new_positions,
+			alive  = agents_alive,
+			energy = agents_energy
 		)
 
 		# --- 2. Eat ---
@@ -531,7 +533,7 @@ class GridWorld:
 		energy_per_agent_grid = jnp.where(eating_agents_grid>0, energy_grid/eating_agents_grid, 0.0) #H,W
 
 		agents_energy_intake = jax.vmap(
-			lambda cells: jnp.sum(energy_per_agent_grid[*cells]) 
+			lambda cells: jnp.sum(energy_per_agent_grid[*cells])
 		)(body_cells)
 
 		agents_energy = jnp.clip(agents.energy + agents_energy_intake, -jnp.inf, self.cfg.max_energy)

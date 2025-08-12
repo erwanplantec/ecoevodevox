@@ -56,8 +56,8 @@ class MiniEnv:
 	#-------------------------------------------------------------------
 	def rollout(self, params: PolicyParams, steps: int,  key: jax.Array)->MiniEnvState:
 		def _step(state, key):
-			state = self.step(state, key)
-			return state, state
+			new_state = self.step(state, key)
+			return new_state, state
 		key_init, key_roll = jr.split(key)
 		state = self.reset(params, key_init)
 		_, states = jax.lax.scan(_step, state, jr.split(key_roll, steps))

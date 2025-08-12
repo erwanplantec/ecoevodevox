@@ -16,20 +16,33 @@ class GeneralizedMutation(MutationModel):
 	p_mut: float
 	num_prms: int
 	reshaper: Callable
+	sigma_size: float
+	max_size: float
+	min_size: float
 	#-------------------------------------------------------------------
-	def __init__(self, sigma: float, p_mut: float, sigma_size: float=0.0, *, genotype_like: Genotype):
+	def __init__(self, 
+		sigma: float,  # Standard deviation for parameter mutations
+		p_mut: float,  # Probability of mutating each parameter
+		genotype_like: Genotype,  # Template genotype used to determine parameter structure
+		sigma_size: float=0.0,
+		max_size: float=10.0,
+		min_size: float=1.0):  # Standard deviation for body size mutations
 		super().__init__(sigma_size)
 		self.sigma = sigma
 		self.p_mut = p_mut
-		flat_pparams, self.reshaper = ravel_pytree(genotype_like.policy_params)
-		self.num_prms = len(flat_pparams)
+		flat_params, self.reshaper = ravel_pytree(genotype_like.policy_params)
+		self.num_prms = len(flat_params)
+		self.sigma_size = sigma_size
+		self.max_size = max_size
+		self.min_size = min_size
 	#-------------------------------------------------------------------
 	def mutate_policy_params(self, params: PolicyParams, key: jax.Array) -> PolicyParams:
 		k_mut, k_locs = jr.split(key)
 		epsilon = jr.normal(k_mut, (self.num_prms,)) * self.sigma
-		epsilon = jnp.where(
-			jr.bernoulli(k_locs, self.p_mut, (self.num_prms,)),
-			epsilon, 0.0
-		)
+		if self.p_mut > 0.0:
+			epsilon = jnp.where(
+				jr.bernoulli(k_locs, self.p_mut, (self.num_prms,)),
+				epsilon, 0.0
+			)
 		epsilon = self.reshaper(epsilon)
 		return jax.tree.map(lambda x, eps: x+eps, params, epsilon)

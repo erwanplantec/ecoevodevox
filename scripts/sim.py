@@ -4,9 +4,7 @@ import jax
 from jax import numpy as jnp, random as jr, nn as jnn
 import wandb
 import matplotlib.pyplot as plt
-
 from src.simulation import Simulator
-
 
 
 def main():
