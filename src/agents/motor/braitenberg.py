@@ -91,9 +91,16 @@ class BraitenbergMotorInterface(MotorInterface):
 
 
 if __name__ == '__main__':
-	
+	print("TEST: BraitenbergMotorInterface")
+	import matplotlib.pyplot as plt
 	interface = BraitenbergMotorInterface(1.0, 0.1)
-	action = jnp.array([1.0,-1.0])
-	position = Body(jnp.zeros(2), jnp.array(jnp.pi), jnp.ones(()))
-	new_pos = interface.move(action, position)
-	print(new_pos)
+	action = jnp.array([1.0,1.0])
+	body = Body(jnp.zeros(2), jnp.array(jnp.pi), jnp.ones(()))
+	poss = []
+	for _ in range(100):
+		body = interface.move(action, body)
+		poss.append(body.pos)
+	poss = jnp.stack(poss)
+	print(poss)
+	plt.scatter(poss[:,0], poss[:,1], c=jnp.arange(poss.shape[0]))
+	plt.show()

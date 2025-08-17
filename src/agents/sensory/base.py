@@ -7,7 +7,7 @@ from ..core import *
 
 class SensoryInterface(PyTreeNode):
 	#-------------------------------------------------------------------
-	def encode(self, obs: Observation, policy_state: PolicyState, sensory_state: SensoryState)->tuple[PolicyInput,SensoryState]:
+	def encode(self, obs: Observation, policy_state: PolicyState, sensory_state: SensoryState)->tuple[PolicyInput,Float16,SensoryState,dict]:
 		"""
 		maps environment observation to policy input
 		"""

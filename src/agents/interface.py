@@ -7,8 +7,6 @@ import jax, jax.random as jr, jax.numpy as jnp
 from jaxtyping import Float16, Float
 import equinox as eqx
 
-type BodySize=Float
-
 class AgentInterface(eqx.Module):
 	#-------------------------------------------------------------------
 	_policy_apply: Callable[[PolicyParams,PolicyInput,PolicyState,jax.Array],PolicyState]
@@ -16,7 +14,7 @@ class AgentInterface(eqx.Module):
 	_policy_fctry: Callable[[jax.Array], PolicyParams]
 	_sensory_interface: SensoryInterface
 	_motor_interface: MotorInterface
-	_full_body_pos: Callable
+	_get_body_points: Callable
 	basal_energy_loss: Float16
 	min_body_size: Float
 	max_body_size: Float
@@ -31,6 +29,19 @@ class AgentInterface(eqx.Module):
 				 basal_energy_loss: float=0.0,
 				 min_body_size: float=1.0,
 				 max_body_size: float=10.0):
+		"""Initialize the AgentInterface.
+		
+		Args:
+			policy_apply: Function to apply policy given params, input, state, and key
+			policy_init: Function to initialize policy state from params and key
+			policy_fctry: Function to create policy params from key
+			sensory_interface: Interface for processing sensory inputs
+			motor_interface: Interface for processing motor outputs
+			body_resolution: Resolution for body point discretization (default: 4)
+			basal_energy_loss: Base energy loss per step (default: 0.0)
+			min_body_size: Minimum allowed body size (default: 1.0)
+			max_body_size: Maximum allowed body size (default: 10.0)
+		"""
 		# ---
 		self._policy_apply = policy_apply
 		self._policy_init = policy_init
@@ -54,17 +65,17 @@ class AgentInterface(eqx.Module):
 			rotated_deltas = jnp.matmul(rotation_matrix, deltas_single_batch_dim*body.size).reshape(2,*deltas.shape[1:])
 			return body.pos[:,None,None]+rotated_deltas
 
-		self._full_body_pos = _get_body_points
+		self._get_body_points = _get_body_points
 	#-------------------------------------------------------------------
 	def step(self, obs: Observation, state: AgentState, key: jax.Array)->Tuple[Action,AgentState,dict]:
 		"""Make 1 update step of agent:
 			encode -> policy update -> decode
 		"""
-		policy_input, sensory_state = self.encode_observation(obs, state.policy_state, state.sensory_state)
+		policy_input, sensory_energy_loss, sensory_state, sensory_info = self.encode_observation(obs, state.sensory_state)
 		policy_state, policy_energy_loss = self.policy_apply(state.genotype.policy_params, policy_input, state.policy_state, key)
-		action, energy_loss, motor_state, motor_info = self.decode_policy(policy_state, state.motor_state)
+		action, motor_energy_loss, motor_state, motor_info = self.decode_policy(policy_state, state.motor_state)
 		
-		energy = state.energy - energy_loss - self.basal_energy_loss
+		energy = state.energy - sensory_energy_loss - policy_energy_loss - motor_energy_loss - self.basal_energy_loss
 
 		state = state.replace(
 			policy_state=policy_state, 
@@ -74,11 +85,11 @@ class AgentInterface(eqx.Module):
 			age=state.age+1  
 		)
 
-		infos = {"motor_energy_loss": energy_loss, "policy_energy_loss": policy_energy_loss, **motor_info}
+		infos = {"motor_energy_loss": motor_energy_loss, "policy_energy_loss": policy_energy_loss, "sensory_energy_loss": sensory_energy_loss, **motor_info}
 
 		return action, state, infos
 	#-------------------------------------------------------------------
-	def init(self, genotype: Genotype, key: jax.Array)->tuple[PolicyState,SensoryState,MotorState,BodySize]:
+	def init(self, genotype: Genotype, key: jax.Array)->tuple[PolicyState,SensoryState,MotorState,Float16]:
 		ks, kp, km = jr.split(key, 3)
 		policy_state = self._policy_init(genotype.policy_params, kp)
 		sensory_state = self._sensory_interface.init(policy_state, ks)
@@ -96,17 +107,17 @@ class AgentInterface(eqx.Module):
 	def policy_fctry(self, key: jax.Array)->PolicyParams:
 		return self._policy_fctry(key)
 	#-------------------------------------------------------------------
-	def move(self, action: Action, body: Body):
+	def move(self, action: Action, body: Body)->Body:
 		return self._motor_interface.move(action,body)
 	#-------------------------------------------------------------------
-	def decode_policy(self, policy_state: PolicyState, motor_state: MotorState):
+	def decode_policy(self, policy_state: PolicyState, motor_state: MotorState)->tuple[Action,Float16,MotorState,dict]:
 		return self._motor_interface.decode(policy_state, motor_state)
 	#-------------------------------------------------------------------	
-	def encode_observation(self, obs: Observation, policy_state: PolicyState, sensory_state: SensoryState)->Action:
-		return self._sensory_interface.encode(obs, policy_state, sensory_state)
+	def encode_observation(self, obs: Observation, sensory_state: SensoryState)->tuple[PolicyInput,Float16,SensoryState,dict]:
+		return self._sensory_interface.encode(obs, sensory_state)
 	#-------------------------------------------------------------------
-	def full_body_pos(self, body: Body)->jax.Array:
-		return self._full_body_pos(body)
+	def get_body_points(self, body: Body)->jax.Array:
+		return self._get_body_points(body)
 	#-------------------------------------------------------------------
 
 #=======================================================================

@@ -1,8 +1,21 @@
 from .base import DevelopmentalModel
-from .model_e import Model_E
 from .rand import RAND
+from .direct import DirectRNN, DirectCTRNN
+
+import jax
+
+
+class DummyEncodingModel(DevelopmentalModel):
+	#-------------------------------------------------------------------
+	def __init__(self, *args, **kwargs):
+		pass
+	#-------------------------------------------------------------------
+	def __call__(self, key: jax.Array|None=None):
+		return None
 
 encoding_models = {
 	"rand": RAND,
-	"mdl_e": Model_E,
+	"direct_rnn": DirectRNN,
+	"direct_ctrnn": DirectCTRNN,
+	"dummy": DummyEncodingModel,
 }

@@ -50,7 +50,7 @@ class MiniEnv:
 	#-------------------------------------------------------------------
 	def get_observation(self, state: MiniEnvState):
 		body = state.agent_state.body
-		indices = get_cell_index(self.agent_interface.full_body_pos(body))
+		indices = get_cell_index(self.agent_interface.get_body_points(body))
 		obs = state.state_grid[:,*indices]
 		return Observation(obs, jnp.asarray(0.0), jnp.zeros((1, *obs.shape[1:])))
 	#-------------------------------------------------------------------
@@ -109,7 +109,7 @@ class Gather(MiniEnv):
 	#-------------------------------------------------------------------
 	def step(self, state: GatherState, key: jax.Array) -> GatherState:
 		state = super().step(state, key)
-		bps = self.agent_interface.full_body_pos(state.agent_state.body)
+		bps = self.agent_interface.get_body_points(state.agent_state.body)
 		food = state.food.at[*get_cell_index(bps)].set(False)
 		chems = jax.scipy.signal.convolve2d(food, diff_kernel)[None]
 		return GatherState(chems, state.agent_state, food)

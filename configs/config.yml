@@ -62,6 +62,7 @@ agents:
     which: "spatially_embedded"
     sensor_expression_threshold: 0.9
     border_threshold: 0.9
+    body_resolution: 4
 
   nn:
     which: "ctrnn"

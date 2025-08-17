@@ -11,11 +11,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 from functools import partial
+from typing import Callable
 
 from .agents.motor.base import MotorInterface
 from .agents.nn.base import Policy
 from .agents.sensory.base import SensoryInterface
-from .devo.base import DevelopmentalModel
 from .evo.core import MutationModel
 from .agents.core import Genotype
 from .eco.gridworld import EnvState, FoodType, ChemicalType, GridWorld, GridworldConfig
@@ -167,7 +167,10 @@ class Simulator:
 				 log: bool=False,  # Whether to log metrics during simulation
 				 ckpt_dir: str|None=None,  # Directory to save checkpoints (None to disable)
 				 ckpt_freq: int=10_000,  # Frequency of checkpoint saves (in steps)
-				 n_devices: int|None=None):  # Number of devices to use (None for all available)
+				 n_devices: int|None=None, # Number of devices to use (None for all available)
+				 metrics_fn: Callable=metrics_fn, # Function to compute metrics
+				 host_log_transform: Callable=host_log_transform # Function to transform metrics for logging
+				):  
 		# ---
 		self.world = world
 		key_sim, key_aux = jr.split(key)
@@ -295,7 +298,7 @@ class Simulator:
 			elif cmd in ["h", "help"]:
 				print("""
 					Commands:
-					s, sim, simulate: simulate the world
+					s, sim, simulate [steps]: simulate the world for a given number of steps (default: 1)
 					r, render: render the world
 					q: quit the simulation
 					h, help: show this help message
@@ -427,26 +430,3 @@ if __name__ == '__main__':
 
 	simulator = ScenarioSimulator(scenario_file)
 	simulator.simulate(simulator.state, jr.key(1), 100)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

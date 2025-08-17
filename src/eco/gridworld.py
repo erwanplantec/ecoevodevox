@@ -16,13 +16,7 @@ from jaxtyping import (
 	UInt32,
 	Float16, Float32
 )
-
 from ..agents.interface import AgentInterface, AgentState, Genotype, Body
-from .utils import (
-	f16, f32, i8, i16, i32, i64, ui8, ui16, ui32,
-	MAX_INT16, boolean_maxpool, convolve,
-	neighbor_states_fn, moore_neighborhood, k_neighborhood
-)
 
 # ======================== UTILS =============================
 
@@ -116,18 +110,20 @@ def make_chemical_diffusion_convolution(env_size: tuple[int,int],
 # ============================================================
 
 class ChemicalType(PyTreeNode):
-	diffusion_rate: Float16
-	is_sparse: Bool
-	emission_rate: Float16
+	"""chemical type definition"""
+	diffusion_rate: Float16 #diffusion rate of chemical in environment
+	is_sparse: Bool # whether the chemical is sparse (i.e. only present in a few cells)
+	emission_rate: Float16 # base probability of emission
 
 class FoodType(PyTreeNode):
-	growth_rate: Float32
-	dmin: Float32
-	dmax: Float32
-	chemical_signature: Float32
-	energy_concentration: Float32
-	spontaneous_grow_prob: Float32
-	initial_density: Float32
+	"""food type definition"""
+	growth_rate: Float32 # growth rate of food
+	dmin: Float32 # minimum distance from food source to start growing
+	dmax: Float32 # maximum distance from food source to stop growing
+	chemical_signature: Float32 # chemical signature of food
+	energy_concentration: Float32 # energy concentration of food
+	spontaneous_grow_prob: Float32 # probability of spontaneous growth
+	initial_density: Float32 # initial density of food
 
 class EnvState(PyTreeNode):
 	agents_states: AgentState
@@ -181,6 +177,12 @@ class GridWorld:
 		food_types: FoodType, 
 		*,
 		key: jax.Array):
+
+		# ---
+		nb_food_types = food_types.growth_rate.shape[0]
+		nb_chemical_types = chemical_types.diffusion_rate.shape[0]
+		assert food_types.chemical_signature.shape==(nb_food_types, nb_chemical_types)
+		# ---
 		
 		self.cfg = cfg
 		self.walls = jr.bernoulli(key, cfg.walls_density, cfg.size)
@@ -203,7 +205,7 @@ class GridWorld:
 		@jax.jit
 		def _vision_fn(x: jax.Array, body: Body):
 			"""Return window of array corresponding to agent view if agent at pos"""
-			indices = get_cell_index(agent_interface.full_body_pos(body))
+			indices = get_cell_index(agent_interface.get_body_points(body))
 			return x[:, *indices] if x.ndim==3 else x[*indices]
 
 		self.vision_fn = _vision_fn
@@ -212,7 +214,7 @@ class GridWorld:
 		self.mutation_fn = mutation_fn
 		self.agent_scent_diffusion_kernel = jnp.array([[ 0.1 , 0.1 , 0.1 ],
 													   [ 0.1 , 1.0 , 0.1 ],
-													   [ 0.1 , 0.1 , 0.1 ]], dtype=f16)
+													   [ 0.1 , 0.1 , 0.1 ]], dtype=jnp.float16)
 
 	#-------------------------------------------------------------------
 
@@ -263,13 +265,13 @@ class GridWorld:
 		key_prms, key_pos, key_head, key_size, key_init = jr.split(key, 5)
 		alive = jnp.ones(self.cfg.init_agents, dtype=bool)
 		policy_params = jax.vmap(self.agent_interface.policy_fctry)(jr.split(key_prms,self.cfg.init_agents))
-		body_sizes = jr.uniform(key_size, (self.cfg.init_agents,), minval=self.agent_interface.min_body_size, maxval=self.agent_interface.max_body_size, dtype=f16) 
+		body_sizes = jr.uniform(key_size, (self.cfg.init_agents,), minval=self.agent_interface.min_body_size, maxval=self.agent_interface.max_body_size, dtype=jnp.float16) 
 		genotypes = Genotype(policy_params, body_sizes)
 		policy_states, sensory_states, motor_states, body_sizes = jax.vmap(self.agent_interface.init)(
 			genotypes, jr.split(key_init, self.cfg.init_agents)
 		)
-		positions = jr.uniform(key_pos, (self.cfg.init_agents, 2), minval=1.0, maxval=jnp.array(self.cfg.size, dtype=f16)-1, dtype=f16)
-		headings = jr.uniform(key_head, (self.cfg.init_agents,), minval=0.0, maxval=2*jnp.pi, dtype=f16)
+		positions = jr.uniform(key_pos, (self.cfg.init_agents, 2), minval=1.0, maxval=jnp.array(self.cfg.size, dtype=jnp.float16)-1, dtype=jnp.float16)
+		headings = jr.uniform(key_head, (self.cfg.init_agents,), minval=0.0, maxval=2*jnp.pi, dtype=jnp.float16)
 		bodies = Body(positions, headings, body_sizes)
 
 		states = AgentState(
@@ -282,18 +284,18 @@ class GridWorld:
 			body 			     = bodies, 
 			# ---
 			alive 				 = alive, 
-			energy 				 = jnp.full((self.cfg.init_agents), self.cfg.initial_energy, dtype=f16)*alive, 
-			time_above_threshold = jnp.full((self.cfg.init_agents,), 0, dtype=ui16), 
-			time_below_threshold = jnp.full((self.cfg.init_agents,), 0, dtype=ui16),
+			energy 				 = jnp.full((self.cfg.init_agents), self.cfg.initial_energy, dtype=jnp.float16)*alive, 
+			time_above_threshold = jnp.full((self.cfg.init_agents,), 0, dtype=jnp.uint16), 
+			time_below_threshold = jnp.full((self.cfg.init_agents,), 0, dtype=jnp.uint16),
 			# ---
 			reproduce 			 = jnp.full((self.cfg.init_agents,), False, dtype=bool),
-			reward 				 = jnp.zeros((self.cfg.init_agents,), dtype=f16), 
+			reward 				 = jnp.zeros((self.cfg.init_agents,), dtype=jnp.float16), 
 			# ---
-			age 				 = jnp.ones((self.cfg.init_agents), dtype=ui16), 
-			n_offsprings 		 = jnp.zeros(self.cfg.init_agents, dtype=ui16),
-			id_ 				 = jnp.where(alive, jnp.cumsum(alive, dtype=ui32), 0),
-			parent_id_ 			 = jnp.zeros(self.cfg.init_agents, dtype=ui32),
-			generation 			 = jnp.zeros(self.cfg.init_agents, dtype=ui16),
+			age 				 = jnp.ones((self.cfg.init_agents), dtype=jnp.uint16), 
+			n_offsprings 		 = jnp.zeros(self.cfg.init_agents, dtype=jnp.uint16),
+			id_ 				 = jnp.where(alive, jnp.cumsum(alive, dtype=jnp.uint32), 0),
+			parent_id_ 			 = jnp.zeros(self.cfg.init_agents, dtype=jnp.uint32),
+			generation 			 = jnp.zeros(self.cfg.init_agents, dtype=jnp.uint16),
 		)
 
 		states = jax.tree.map(_pad, states)
@@ -342,18 +344,18 @@ class GridWorld:
 
 			childs_alive = childs_mask
 			
-			childs_genotypes= jax.vmap(self.mutation_fn)(parents_genotypes, jr.split(key_mut, self.cfg.birth_pool_size))
+			childs_genotypes = jax.vmap(self.mutation_fn)(parents_genotypes, jr.split(key_mut, self.cfg.birth_pool_size))
 			childs_policy_states, childs_sensory_states, childs_motor_states, childs_sizes = jax.vmap(self.agent_interface.init)(
 				childs_genotypes, jr.split(key_init, self.cfg.birth_pool_size)
 			)
 			
-			childs_energy = jnp.full(self.cfg.birth_pool_size, self.cfg.initial_energy, dtype=f16)
+			childs_energy = jnp.full(self.cfg.birth_pool_size, self.cfg.initial_energy, dtype=jnp.float16)
 
 			parents_bodies = jax.tree.map(lambda x: x[parents_buffer_id], agents.body)
 			direction = jnp.mod(parents_bodies.heading + jnp.pi, 2*jnp.pi)
 			delta = jnp.stack([jnp.cos(direction), jnp.sin(direction)], axis=-1)
 			childs_positions = agents.body.pos[parents_buffer_id] + delta*(parents_bodies.size+childs_sizes+0.1)[:,None] 
-			childs_headings = jr.uniform(key_head, minval=0.0, maxval=2*jnp.pi, dtype=f16)
+			childs_headings = jr.uniform(key_head, minval=0.0, maxval=2*jnp.pi, dtype=jnp.float16)
 			childs_bodies = Body(childs_positions, childs_headings, childs_sizes)
 
 			agents_alive = agents.alive.at[childs_buffer_id].set(childs_alive) #make sur to not overwrite occupied buffer ids (if more reproducers than free buffer spots)
@@ -387,7 +389,7 @@ class GridWorld:
 			agents_n_offsprings = agents.n_offsprings.at[childs_buffer_id].set(0)
 			agents_n_offsprings = agents_n_offsprings.at[parents_buffer_id].add(1)
 
-			childs_ids = jnp.where(childs_mask, jnp.cumsum(childs_mask, dtype=ui32)+state.last_agent_id+1, 0)
+			childs_ids = jnp.where(childs_mask, jnp.cumsum(childs_mask, dtype=jnp.uint32)+state.last_agent_id+1, 0)
 			agents_id = agents.id_.at[childs_buffer_id].set(childs_ids)
 
 			childs_parent_id = agents.id_[parents_buffer_id]
@@ -498,7 +500,7 @@ class GridWorld:
 
 		new_positions = jax.vmap(self.agent_interface.move)(actions, agents.body)
 		new_positions = self._normalize_position(new_positions)
-		hits_wall = jax.vmap(lambda p: jnp.any(self.walls[*get_cell_index(self.agent_interface.full_body_pos(p))]))(new_positions)
+		hits_wall = jax.vmap(lambda p: jnp.any(self.walls[*get_cell_index(self.agent_interface.get_body_points(p))]))(new_positions)
 		hits_wall = hits_wall & agents.alive
 		if self.cfg.wall_effect=="kill":
 			agents_alive = agents.alive&(~hits_wall)
@@ -522,7 +524,7 @@ class GridWorld:
 
 		food = state.food
 		eating_agents = agents.alive & (agents.energy<self.cfg.max_energy) #can only eat if not full and alive
-		body_cells = get_cell_index(jax.vmap(self.agent_interface.full_body_pos)(agents.body)) #N,2,S,S
+		body_cells = get_cell_index(jax.vmap(self.agent_interface.get_body_points)(agents.body)) #N,2,S,S
 		*_, S = body_cells.shape
 		eating_agents_expanded = jnp.tile(eating_agents[:,None,None], (1,S,S))
 
@@ -632,8 +634,3 @@ class GridWorld:
 			cam.snap()
 
 		return cam
-
-
-if __name__ == '__main__':
-	pass
-
