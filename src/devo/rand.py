@@ -75,20 +75,26 @@ class RAND(DevelopmentalModel):
             max_neurons (int): Maximum number of neurons allowed. Defaults to 128.
             regulatory_genes (int): Number of regulatory genes. Defaults to 8.
             migratory_genes (int): Number of migratory genes. Defaults to 4.
-            perturbation_genes (int): Number of perturbation genes. Defaults to 2.
+            signalling_genes (int): Number of signalling genes. Defaults to 2.
             sensory_genes (int): Number of sensory genes. Defaults to 1.
             motor_genes (int): Number of motor genes. Defaults to 1.
             synaptic_genes (int): Number of synaptic genes. Defaults to 4.
             synaptic_proteins (int): Number of synaptic proteins. Defaults to 4.
+            signalling_proteins (int): Number of signalling proteins. Defaults to 4.
             max_mitosis (int): Maximum number of mitosis events per step. Defaults to 10.
             mitotic_factor_threshold (float): Threshold for mitosis activation. Defaults to 10.0.
             apoptosis_factor_threshold (float): Threshold for cell death. Defaults to 10.0.
-            communication_fields (int): Number of communication fields. Defaults to 8.
             nb_synaptic_rules (int): Number of synaptic rules. Defaults to 1.
             grn_model (str): Type of gene regulatory network model. Defaults to "continuous".
             autonomous_decay (bool): Whether to apply autonomous decay. Defaults to True.
             dev_iters (int): Number of development iterations. Defaults to 400.
+            gene_noise_scale (float): Scale of noise applied to gene expression. Defaults to 0.0.
+            position_noise_scale (float): Scale of noise applied to neuron positions. Defaults to 0.0.
+            neuron_params_genes (int): Number of genes encoding neuron parameters. Defaults to 1.
             network_type (str): Type of neural network ("ctrnn" or "rnn"). Defaults to "ctrnn".
+            expression_bounds (tuple[float, float]): Bounds for gene expression values. Defaults to (0.0, 1.0).
+            motor_activation_fn (callable): Activation function for motor outputs. Defaults to identity.
+            sensory_activation_fn (callable): Activation function for sensory inputs. Defaults to identity.
             key (jax.Array): JAX random key for initialization.
         """
         self.nb_neurons = nb_neurons

@@ -22,11 +22,13 @@ class BraitenbergMotorInterface(MotorInterface):
 	wheel_speed_gain: float=0.1
 	motor_energy_cost: float=0.1
 	max_neuron_force: float=1.0
+	motor_expression_threshold: float=0.1
 	#-------------------------------------------------------------------
 
 	def init(self, policy_state: PolicyState, key: jax.Array) -> BraitenbergMotorState:
 		# ---
 		assert hasattr(policy_state, "x") #make sure network is spatially embedded
+		assert hasattr(policy_state, "m") #make sure neurons have motor propoerties
 		# ---
 		xs = policy_state.x
 		left_motor_pos = jnp.array([-1.0, 0.0])
@@ -38,7 +40,9 @@ class BraitenbergMotorInterface(MotorInterface):
 		dist_to_right_motor = jnp.linalg.norm(xs-right_motor_pos[None], axis=-1)
 		on_right_motor = dist_to_right_motor < self.max_distance_to_motor
 
-		return BraitenbergMotorState(on_right_motor, on_left_motor)
+		is_motor = policy_state.m > self.motor_expression_threshold
+
+		return BraitenbergMotorState(on_right_motor&is_motor, on_left_motor&is_motor)
 
 	#-------------------------------------------------------------------
 

@@ -16,6 +16,7 @@ class AgentInterface(eqx.Module):
 	_motor_interface: MotorInterface
 	_get_body_points: Callable
 	basal_energy_loss: Float16
+	size_energy_cost: Float16
 	min_body_size: Float
 	max_body_size: Float
 	#-------------------------------------------------------------------
@@ -27,6 +28,7 @@ class AgentInterface(eqx.Module):
 				 motor_interface: MotorInterface,
 				 body_resolution: int=4,
 				 basal_energy_loss: float=0.0,
+				 size_energy_cost: float=0.0,
 				 min_body_size: float=1.0,
 				 max_body_size: float=10.0):
 		"""Initialize the AgentInterface.
@@ -49,6 +51,7 @@ class AgentInterface(eqx.Module):
 		self._sensory_interface = sensory_interface
 		self._motor_interface = motor_interface
 		self.basal_energy_loss = jnp.asarray(basal_energy_loss, dtype=jnp.float16)
+		self.size_energy_cost = jnp.asarray(size_energy_cost, dtype=jnp.float16)
 		self.min_body_size = jnp.asarray(min_body_size, dtype=jnp.float16)
 		self.max_body_size = jnp.asarray(max_body_size, dtype=jnp.float16)
 		# ---
@@ -71,11 +74,15 @@ class AgentInterface(eqx.Module):
 		"""Make 1 update step of agent:
 			encode -> policy update -> decode
 		"""
+		# 1. encode observation
 		policy_input, sensory_energy_loss, sensory_state, sensory_info = self.encode_observation(obs, state.sensory_state)
+		# 2. policy update
 		policy_state, policy_energy_loss = self.policy_apply(state.genotype.policy_params, policy_input, state.policy_state, key)
+		# 3. decode policy
 		action, motor_energy_loss, motor_state, motor_info = self.decode_policy(policy_state, state.motor_state)
-		
-		energy = state.energy - sensory_energy_loss - policy_energy_loss - motor_energy_loss - self.basal_energy_loss
+		# 4. compute energy loss (size, basal, motor, policy, sensory)
+		size_energy_loss = self.size_energy_cost * state.genotype.body_size
+		energy = state.energy - sensory_energy_loss - policy_energy_loss - motor_energy_loss - self.basal_energy_loss - size_energy_loss
 
 		state = state.replace(
 			policy_state=policy_state, 
@@ -90,6 +97,8 @@ class AgentInterface(eqx.Module):
 		return action, state, infos
 	#-------------------------------------------------------------------
 	def init(self, genotype: Genotype, key: jax.Array)->tuple[PolicyState,SensoryState,MotorState,Float16]:
+		"""Initialize the agent state (policy, sensory, motor, body size)"""
+		# ---
 		ks, kp, km = jr.split(key, 3)
 		policy_state = self._policy_init(genotype.policy_params, kp)
 		sensory_state = self._sensory_interface.init(policy_state, ks)
