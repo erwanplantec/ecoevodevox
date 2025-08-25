@@ -5,7 +5,7 @@ import equinox as eqx
 import equinox.nn as nn
 from jaxtyping import Float, PyTree
 
-from src.agents.core import Genotype, PolicyParams
+from ..agents.core import Genotype, PolicyParams
 
 class MutationModel(eqx.Module):
 	#-------------------------------------------------------------------

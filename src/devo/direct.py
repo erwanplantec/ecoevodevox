@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import jax.random as jr
 
 from .base import DevelopmentalModel
-from src.agents.nn import CTRNNPolicy, CTRNN, RNN
+from ..agents.nn import CTRNNPolicy, CTRNN, RNN
 
 class DirectCTRNN(DevelopmentalModel):
     # ---

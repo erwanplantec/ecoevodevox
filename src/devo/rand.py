@@ -8,8 +8,8 @@ from flax.struct import PyTreeNode
 from jax.flatten_util import ravel_pytree
 
 from .base import DevelopmentalModel
-from src.agents.nn.ctrnn import SECTRNN
-from src.agents.nn.rnn import SERNN
+from ..agents.nn.ctrnn import SECTRNN
+from ..agents.nn.rnn import SERNN
 
 def heaviside(x: jax.Array)->jax.Array:
     return jnp.where(x>0, 1., 0.)
