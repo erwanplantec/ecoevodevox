@@ -261,6 +261,16 @@ class Simulator:
 		key_sim, key_aux = self.key_sim, self.key_aux
 		world_state = self.world_state
 
+		print("""
+		Starting interactive simulation !
+		
+		Commands:
+		s, sim, simulate [steps]: simulate the world for a given number of steps (default: 1)
+		r, render: render the world
+		q: quit the simulation
+		h, help: show this help message
+		""")
+
 		if world_state is None:
 			print("initializing world ...")
 			key_sim, key_init = jr.split(key_sim)
