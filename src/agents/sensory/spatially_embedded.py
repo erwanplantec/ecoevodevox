@@ -1,3 +1,4 @@
+from ..core import Observation, PolicyState
 from .base import SensoryInterface
 
 import jax
@@ -6,7 +7,9 @@ import equinox as eqx
 import equinox.nn as nn
 from typing import Callable
 from flax.struct import PyTreeNode
-from jaxtyping import Bool
+from jaxtyping import Bool, Float, PyTree
+
+type Observation=PyTree
 
 class State(PyTreeNode):
 	"""A state for a spatially embedded sensory interface."""
@@ -14,7 +17,7 @@ class State(PyTreeNode):
 	s: jax.Array
 	mask: jax.Array
 	indices: jax.Array
-	energy_cost: float
+	energy_cost: Float
 
 class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 	"""A sensory interface that processes spatial information from the environment.
@@ -36,7 +39,7 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 	border_threshold: float=0.0
 	sensor_energy_cost: float=0.0
 	#-------------------------------------------------------------------
-	def sensory_expression(self, policy_state):
+	def sensory_expression(self, policy_state)->jax.Array:
 		"""Process the sensory expression from the policy state.
 		
 		Args:
@@ -46,7 +49,7 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 			jnp.ndarray: Processed sensory signals after thresholding and activation.
 		"""
 		s = policy_state.s * policy_state.mask[:,None]
-		s = jnp.where(s>self.sensor_expression_threshold, s, 0.0)
+		s = jnp.where(s>self.sensor_expression_threshold, s, 0.0); assert isinstance(s, jax.Array)
 		return s
 	#-------------------------------------------------------------------
 	def init(self, policy_state, key):
@@ -68,7 +71,7 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 					 indices=coords, 	
 					 energy_cost=jnp.astype(self.sensor_energy_cost*s.sum(), jnp.float16))
 	#-------------------------------------------------------------------
-	def encode(self, obs, sensory_state: State):
+	def encode(self, obs: Observation, policy_state: PolicyState, sensory_state: State):
 		"""Encode environmental observations into sensory inputs.
 		
 		This method processes three types of inputs:

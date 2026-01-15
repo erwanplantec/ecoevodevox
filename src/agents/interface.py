@@ -75,7 +75,7 @@ class AgentInterface(eqx.Module):
 			encode -> policy update -> decode
 		"""
 		# 1. encode observation
-		policy_input, sensory_energy_loss, sensory_state, sensory_info = self.encode_observation(obs, state.sensory_state)
+		policy_input, sensory_energy_loss, sensory_state, sensory_info = self.encode_observation(obs, state.policy_state, state.sensory_state)
 		# 2. policy update
 		policy_state, policy_energy_loss = self.policy_apply(state.genotype.policy_params, policy_input, state.policy_state, key)
 		# 3. decode policy
@@ -122,8 +122,8 @@ class AgentInterface(eqx.Module):
 	def decode_policy(self, policy_state: PolicyState, motor_state: MotorState)->tuple[Action,Float16,MotorState,dict]:
 		return self._motor_interface.decode(policy_state, motor_state)
 	#-------------------------------------------------------------------	
-	def encode_observation(self, obs: Observation, sensory_state: SensoryState)->tuple[PolicyInput,Float16,SensoryState,dict]:
-		return self._sensory_interface.encode(obs, sensory_state)
+	def encode_observation(self, obs: Observation, policy_state: PolicyState, sensory_state: SensoryState)->tuple[PolicyInput,Float16,SensoryState,dict]:
+		return self._sensory_interface.encode(obs, policy_state, sensory_state)
 	#-------------------------------------------------------------------
 	def get_body_points(self, body: Body)->jax.Array:
 		return self._get_body_points(body)

@@ -207,9 +207,8 @@ class Simulator:
 		)
 
 		@partial(jax.jit, out_shardings=state_shardings) #type:ignore
-		def init_fn(key:jax.Array)->EnvState:
+		def _initialize(key:jax.Array)->EnvState:
 			return self.world.init(key)
-		self.init_fn = init_fn
 
 
 		@partial(jax.jit, in_shardings=(state_shardings,None), out_shardings=state_shardings) #type:ignore
@@ -248,6 +247,9 @@ class Simulator:
 
 			return state
 
+		# ---
+
+		self.initialize = _initialize
 		self.simulate = _simulate
 
 		# ---
@@ -264,7 +266,7 @@ class Simulator:
 		if world_state is None:
 			print("initializing world ...")
 			key_sim, key_init = jr.split(key_sim)
-			world_state = self.init_fn(key_init)
+			world_state = self.initialize(key_init)
 			print("initialization completed")
 
 		print("""
