@@ -1,0 +1,18 @@
+[project]
+name = "ecoevodevox"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "equinox>=0.13.2",
+    "jax>=0.8.2",
+]
+
+[project.optional-dependencies]
+logging = [
+    "wandb>=0.24.0",
+]
+plotting = [
+    "matplotlib>=3.10.8",
+]
