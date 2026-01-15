@@ -175,7 +175,8 @@ class Simulator:
 				 sampling_size: int=16, # Size of samples
 				 n_devices: int|None=None, # Number of devices to use (None for all available)
 				 metrics_fn: Callable=metrics_fn, # Function to compute metrics
-				 host_log_transform: Callable=host_log_transform # Function to transform metrics for logging
+				 host_log_transform: Callable=host_log_transform, # Function to transform metrics for logging,
+				 wandb_project: str="eedx", #Name of wandb project to log to
 				):  
 		# ---
 		if name:
@@ -239,6 +240,8 @@ class Simulator:
 
 		@partial(jax.jit, out_shardings=state_shardings) #type:ignore
 		def _initialize(key:jax.Array)->EnvState:
+			if log:
+				wandb.init(project=wandb_project, name=self.name)
 			return self.world.init(key)
 
 

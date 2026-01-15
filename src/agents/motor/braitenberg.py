@@ -10,11 +10,56 @@ import numpy as np
 from .base import MotorInterface, Action, Body, PolicyState, MotorState, Info
 
 
+class BraitenbergDirectMotorInterface(MotorInterface):
+	# ---
+	dt: float=0.1
+	wheel_speed_gain: float=0.1
+	motor_energy_cost: float=0.1
+	which_motorneurons: str="last"
+	max_wheel_speed: float=1.0
+	# ---
+	def init(self, policy_state: PolicyState, key: jax.Array) -> MotorState:
+		return super().init(policy_state, key)
+	# ---
+	def decode(self, policy_state: PolicyState, motor_state: MotorState) -> tuple[Action, Float, MotorState, Info]:
+		action = policy_state.v[-2:]
+		action = jnp.clip(action*self.wheel_speed_gain, -self.max_wheel_speed, self.max_wheel_speed).astype(jnp.float16)
+		action_norm = jnp.linalg.norm(action)
+		energy_loss = action_norm * self.motor_energy_cost
+		return action, energy_loss, None, {"action_norm": action_norm}
+	# ---
+	def move(self, action: Action, body: Body) -> Body:
+		
+		radius = body.size/2
+		def _if_not_equal(pos, heading, vr, vl):
+			l = radius*2
+			r = radius * (vl+vr) / (vr-vl)
+			icc = pos + jnp.array([-r*jnp.sin(heading),r*jnp.cos(heading)], dtype=pos.dtype)
+			omega = (vr-vl)/l
+			omega = omega * self.dt
+			rotation_matrix = jnp.array([[jnp.cos(omega), -jnp.sin(omega)],
+										 [jnp.sin(omega),  jnp.cos(omega)]], dtype=pos.dtype)
+			pos = rotation_matrix @ (pos-icc) + icc
+			heading = heading + omega
+			return Body(pos, heading, body.size)
+
+		def _if_equal(pos, heading, vr, vl):
+			pos = pos + vr*jnp.array([jnp.cos(heading), jnp.sin(heading)], dtype=pos.dtype) * self.dt
+			return Body(pos, heading, body.size)
+
+		pos, heading = body.pos, body.heading
+		vl, vr = action
+		is_equal = jnp.abs(vr-vl)<1e-5
+		pos = jax.lax.cond(is_equal, _if_equal, _if_not_equal, pos, heading, vr, vl)
+		return pos.replace(heading=jnp.mod(pos.heading, 2*jnp.pi))
+
+	#-------------------------------------------------------------------
+
 class BraitenbergMotorState(struct.PyTreeNode):
 	on_right_motor: jax.Array
 	on_left_motor: jax.Array
 
-class BraitenbergMotorInterface(MotorInterface):
+class BraitenbergSpatiallyEmbeddedMotorInterface(MotorInterface):
 	#-------------------------------------------------------------------
 	dt: float=1.0
 	max_distance_to_motor: float=0.2 
@@ -97,7 +142,7 @@ class BraitenbergMotorInterface(MotorInterface):
 if __name__ == '__main__':
 	print("TEST: BraitenbergMotorInterface")
 	import matplotlib.pyplot as plt
-	interface = BraitenbergMotorInterface(1.0, 0.1)
+	interface = BraitenbergSpatiallyEmbeddedMotorInterface(1.0, 0.1)
 	action = jnp.array([1.0,1.0])
 	body = Body(jnp.zeros(2), jnp.array(jnp.pi), jnp.ones(()))
 	poss = []

@@ -132,7 +132,7 @@ class EnvState(PyTreeNode):
 	last_agent_id: UInt32=0
 
 class Observation(PyTreeNode):
-	chemicals: jax.Array
+	chemicals: jax.Array #C,H,W
 	internal: jax.Array
 	walls: jax.Array
 
@@ -455,7 +455,7 @@ class GridWorld:
 		chemical_fields = jnp.where(
 			self.chemical_types.is_sparse[:,None,None], 
 			jr.bernoulli(key, p=chemical_fields*self.chemical_types.emission_rate[...,None,None]).astype(jnp.float16), 
-			chemical_fields )
+			chemical_fields ); assert isinstance(chemical_fields, jax.Array)
 		agents = state.agents_states
 		agents_i, agents_j = get_cell_index(agents.body.pos).T
 		agents_alive_grid = jnp.zeros(self.cfg.size).at[agents_i, agents_j].add(agents.alive)
