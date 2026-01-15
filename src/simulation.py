@@ -261,6 +261,12 @@ class Simulator:
 		key_sim, key_aux = self.key_sim, self.key_aux
 		world_state = self.world_state
 
+		if world_state is None:
+			print("initializing world ...")
+			key_sim, key_init = jr.split(key_sim)
+			world_state = self.init_fn(key_init)
+			print("initialization completed")
+
 		print("""
 		Starting interactive simulation !
 		
@@ -270,12 +276,6 @@ class Simulator:
 		q: quit the simulation
 		h, help: show this help message
 		""")
-
-		if world_state is None:
-			print("initializing world ...")
-			key_sim, key_init = jr.split(key_sim)
-			world_state = self.init_fn(key_init)
-			print("initialization completed")
 
 		while True:
 			user_input = input("cmd: ")
