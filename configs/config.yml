@@ -1,9 +1,11 @@
+# ===== infos =====
 seed: 10
 log: false
-ckpt_dir:
-ckpt_freq: 1_000
+sampling_freq: 2
+sampling_size: 4
+ckpt_freq: 10
 project: "eedx"
-run_name: ""
+name: ""
 
 # ===== chem types =====
 

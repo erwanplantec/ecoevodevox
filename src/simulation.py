@@ -12,12 +12,15 @@ import numpy as np
 import yaml
 from functools import partial
 from typing import Callable
+import random
+import string
+import datetime
 
 from .agents.motor.base import MotorInterface
 from .agents.nn.base import Policy
 from .agents.sensory.base import SensoryInterface
 from .evo.core import MutationModel
-from .agents.core import Genotype
+from .agents.core import AgentState, Genotype
 from .eco.gridworld import EnvState, FoodType, ChemicalType, GridWorld, GridworldConfig
 from .agents import AgentInterface
 from .agents.motor import motor_interfaces
@@ -26,7 +29,8 @@ from .agents.nn import make_apply_init, nn_models
 from .devo import encoding_models
 from .evo import mutation_models
 
-
+def generate_random_name(length=8):
+	return "".join([random.choice(string.ascii_lowercase+string.digits) for _ in range(length)])
 
 def load_config(filename):
 	with open(filename, "r") as file:
@@ -165,22 +169,44 @@ class Simulator:
 				 world: GridWorld,  # The gridworld environment to simulate
 				 key: jax.Array,  # Random key for simulation
 				 log: bool=False,  # Whether to log metrics during simulation
-				 ckpt_dir: str|None=None,  # Directory to save checkpoints (None to disable)
-				 ckpt_freq: int=10_000,  # Frequency of checkpoint saves (in steps)
+				 name: str|None=None,
+				 ckpt_freq: int|None=None,  # Frequency of checkpoint saves (in steps)
+				 sampling_freq: int|None=None, # Frequency of sampling
+				 sampling_size: int=16, # Size of samples
 				 n_devices: int|None=None, # Number of devices to use (None for all available)
 				 metrics_fn: Callable=metrics_fn, # Function to compute metrics
 				 host_log_transform: Callable=host_log_transform # Function to transform metrics for logging
 				):  
 		# ---
+		if name:
+			self.name = name
+		else:
+			date = datetime.datetime.now()
+			self.name = date.strftime("%d_%m_%Y_%H:%M:%S")
+		# ---
 		self.world = world
 		key_sim, key_aux = jr.split(key)
 		self.key_sim = key_sim
 		self.key_aux = key_aux
-		self.log = log
-		self.ckpt_dir = ckpt_dir
-		self.ckpt_freq = ckpt_freq
 		self.n_devices = jax.device_count() if n_devices is None else n_devices
 		assert world.cfg.max_agents % self.n_devices == 0
+		# ---
+		self.log = log
+		# ---
+		self.ckpt_freq = ckpt_freq
+		if ckpt_freq is not None and ckpt_freq>0:
+			ckpt_dir = f"data/{self.name}/ckpts"
+			os.makedirs(ckpt_dir, exist_ok=True)
+		else:
+			ckpt_dir = None
+		# ---
+		self.sampling_freq = sampling_freq
+		self.sampling_size = sampling_size
+		if sampling_freq is not None and sampling_freq>0:
+			sampling_dir = f"data/{self.name}/samples"
+			os.makedirs(sampling_dir, exist_ok=True)
+		else:
+			sampling_dir = None
 		# ---
 
 		def _log_clbk(data: dict):
@@ -188,15 +214,20 @@ class Simulator:
 			wandb.log(data)
 			return jnp.zeros((), dtype=bool)
 
-		def _ckpt_clbck(state_dict):
+		def _ckpt_clbk(state_dict):
 			time = state_dict["env_state"].time
 			filename = f"{ckpt_dir}/{int(time)}.pickle"
 			with open(filename, "wb") as file:
 				pickle.dump(state_dict, file)
 			return jnp.zeros((),dtype=bool)
 
-		if ckpt_dir:
-			os.makedirs(ckpt_dir, exist_ok=True)
+		def _sample_clbk(sample, time):
+			filename = f"{sampling_dir}/{int(time)}.pickle"
+			with open(filename, "wb") as file:
+				pickle.dump(sample, file)
+			return jnp.zeros((),dtype=bool)
+
+			
 
 		device_mesh = jax.make_mesh((self.n_devices,), ('N',))
 		state_shardings = EnvState(
@@ -221,11 +252,25 @@ class Simulator:
 				data = metrics_fn(state, step_data)
 				io_callback(_log_clbk, jax.ShapeDtypeStruct((),bool), data)
 			if ckpt_dir:
+				assert isinstance(ckpt_freq, int)
 				_ = jax.lax.cond(
 					jnp.mod(state.time, ckpt_freq)==0,
-					_ckpt_clbck,
+					lambda s: io_callback(_ckpt_clbk, jax.ShapeDtypeStruct((),bool), s),
 					lambda *a, **k: jnp.zeros((), dtype=bool),
 					{"env_state": state, "key": key}
+				)
+			if sampling_dir:
+				assert isinstance(sampling_freq, int)
+				def _sample_and_clbk(agents, time, key):
+					p = agents.alive / agents.alive.sum()
+					sample_ids = jr.choice(key, agents.alive.shape[0], shape=(sampling_size,), p=p)
+					sample = jax.tree.map(lambda x: x[sample_ids], agents)
+					return io_callback(_sample_clbk, jax.ShapeDtypeStruct((),bool), sample, time)
+				_ = jax.lax.cond(
+					jnp.mod(state.time, sampling_freq)==0,
+					_sample_and_clbk,
+					lambda *a, **k: jnp.zeros((), dtype=bool),
+					state.agents_states, state.time, key
 				)
 			# ---
 			return state
@@ -269,8 +314,10 @@ class Simulator:
 			world_state = self.initialize(key_init)
 			print("initialization completed")
 
-		print("""
+		print(f"""
 		Starting interactive simulation !
+
+		Run name: {self.name}
 		
 		Commands:
 		s, sim, simulate [steps]: simulate the world for a given number of steps (default: 1)
@@ -344,7 +391,7 @@ class Simulator:
 		key, key_make = jr.split(key)
 		world = make_world(cfg, key_make)
 		return (
-			cls(world, key, log=cfg["log"], ckpt_dir=cfg["ckpt_dir"], ckpt_freq=cfg["ckpt_freq"]), 
+			cls(world, key, log=cfg["log"], ckpt_freq=cfg.get("ckpt_freq", None), sampling_freq=cfg.get("sampling_freq", None), sampling_size=cfg.get("sampling_size", 16)), 
 			cfg
 		)
 

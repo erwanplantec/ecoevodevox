@@ -4,6 +4,7 @@ ntbks/
 artifacts/
 src/experimental
 anims/
+data/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
