@@ -7,6 +7,7 @@ import equinox as eqx
 from celluloid import Camera
 
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
 
 from typing import Callable, Literal, NamedTuple, Tuple
@@ -198,7 +199,7 @@ class GridWorld:
 		if cfg.flow is not None:
 			flow = jnp.asarray(cfg.flow)
 			flow = None if jnp.allclose(flow,0.0) else flow
-			
+
 		self.chemicals_diffusion_conv = make_chemical_diffusion_convolution(cfg.size,
 																			chemical_types.diffusion_rate,
 																			flow=flow) #type:ignore
@@ -587,7 +588,7 @@ class GridWorld:
 
 	#-------------------------------------------------------------------
 
-	def render(self, state: EnvState, ax:plt.Axes|None=None):
+	def render(self, state: EnvState, ax:Axes|None=None):
 
 		if ax is None:
 			ax = plt.figure().add_subplot()
@@ -614,7 +615,7 @@ class GridWorld:
 			h = body.heading
 			e = agents.energy[a]
 			s = body.size
-			body = Rectangle([x-s/2,y-s/2], s, s, angle=(h/(2*jnp.pi))*360, 
+			body = Rectangle((x-s/2,y-s/2), s, s, angle=(h/(2*jnp.pi))*360, 
                      facecolor=colormap(e), rotation_point="center")
 			ax.add_patch(body)
 			dy, dx = jnp.sin(h), jnp.cos(h)
@@ -624,7 +625,7 @@ class GridWorld:
 
 	# ---
 
-	def render_states(self, states: list|EnvState, ax: plt.Axes, cam: Camera):
+	def render_states(self, states: list|EnvState, ax: Axes, cam: Camera):
 
 		if isinstance(states, EnvState):
 			T = states.time.shape[0]
