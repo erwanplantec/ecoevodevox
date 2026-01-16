@@ -2,7 +2,7 @@ wandb/
 ntbks/
 artifacts/
 src/experimental
-anims/
+anims/*
 data/*
 configs/dev_cfg.yml
 
