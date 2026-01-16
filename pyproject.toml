@@ -18,3 +18,6 @@ plotting = [
     "celluloid>=0.2.0",
     "matplotlib>=3.10.8",
 ]
+notebook = [
+    "ipython>=9.9.0",
+]
