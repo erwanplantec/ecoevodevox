@@ -41,7 +41,7 @@ def make_growth_convolution(env_size: tuple[int,int],
 	# ---
 	H, W = env_size
 	# ---
-	assert (not H%2) and (not W%2)
+	assert (not H%2) and (not W%2), f"world dimsensions must be even, got {H}x{W}"
 	# ---
 	mH, mW = H//2, W//2
 	L = jnp.mgrid[-mH:mH,-mW:mW]
@@ -78,7 +78,7 @@ def make_chemical_diffusion_convolution(env_size: tuple[int,int],
 	# ---
 	H, W = env_size
 	# ---
-	assert (not H%2) and (not W%2)
+	assert (not H%2) and (not W%2), f"world dimsensions must be even, got {H}x{W}"
 	# ---
 	mH, mW = H//2, W//2
 	L = jnp.mgrid[-mH:mH,-mW:mW]
@@ -94,7 +94,6 @@ def make_chemical_diffusion_convolution(env_size: tuple[int,int],
 		diffusion_kernels = jnp.exp(-D / ( cosines * diffusion_rates[:,None,None] * flow_norm + (1-cosines)*0.1))
 
 	diffusion_kernels = jnp.where(jnp.isnan(diffusion_kernels), 1.0, diffusion_kernels) #FIX THIS 
-	diffusion_kernels = diffusion_kernels / jnp.sum(diffusion_kernels, axis=(1,2), keepdims=True) #normalize kernels
 	
 	diffusion_kernels_fft = jnp.fft.fft2(jnp.fft.fftshift(diffusion_kernels, axes=(1,2)))
 
@@ -126,8 +125,8 @@ class FoodType(PyTreeNode):
 	initial_density: Float32 # initial density of food
 
 class EnvState(PyTreeNode):
-	agents_states: AgentState
-	food: FoodMap
+	agents_states: AgentState # state of agents
+	food: FoodMap # 2d map indicating food locations
 	time: UInt32
 	last_agent_id: UInt32=0
 
@@ -142,24 +141,25 @@ class GridworldConfig(PyTreeNode):
 	# ---
 	size: tuple[int,int]=(256,256)  # Grid dimensions (height, width)
 	# ---
-	walls_density: float=1e-4  # Probability of wall placement at each grid cell
+	walls_density: float=1e-4  							   # Probability of wall placement at each grid cell
 	wall_effect: Literal["kill","penalize","none"]="kill"  # What happens when agents hit walls
-	wall_penalty: float=1.0  # Penalty for hitting walls
+	wall_penalty: float=1.0  							   # Penalty for hitting walls (if wall_effect==penalize)
 	# ---
 	max_agents: int=10_000  # Maximum number of agents that can exist simultaneously
 	init_agents: int=1_024  # Initial number of agents at environment start
-	max_age: int=1_000  # Maximum age before agents die of old age
+	max_age: int=1_000  	# Maximum age before agents die of old age
 	# ---
-	reproduction_cost: float=0.5  # Energy cost for reproducing
-	max_energy: float=50.0  # Maximum energy an agent can have
-	initial_energy: float=1.0  # Starting energy for new agents
+	reproduction_cost: float=0.5  				# Energy cost for reproducing
+	max_energy: float=50.0  					# Maximum energy an agent can have
+	initial_energy: float=1.0  					# Starting energy for new agents
 	time_above_threshold_to_reproduce: int=100  # Time steps above energy threshold needed to reproduce
-	time_below_threshold_to_die: int=30  # Time steps below energy threshold before death
+	time_below_threshold_to_die: int=30  		# Time steps below energy threshold before death
 	# ---
 	chemicals_detection_threshold: float=1e-3  # Minimum chemical concentration for detection
 	# ---
-	birth_pool_size: int=256  # Size of pool for managing births
+	birth_pool_size: int=256  # Size of pool for managing births (sets maximum births per step)
 	# ---
+	agent_scent_diffusion_rate: float=0.1
 	flow: jax.Array|tuple[float,float]|None=None  # Environmental flow field affecting chemical diffusion
 
 #=======================================================================
@@ -198,13 +198,14 @@ class GridWorld:
 		if cfg.flow is not None:
 			flow = jnp.asarray(cfg.flow)
 			flow = None if jnp.allclose(flow,0.0) else flow
+			
 		self.chemicals_diffusion_conv = make_chemical_diffusion_convolution(cfg.size,
 																			chemical_types.diffusion_rate,
 																			flow=flow) #type:ignore
 
 		@jax.jit
 		def _vision_fn(x: jax.Array, body: Body):
-			"""Return window of array corresponding to agent view if agent at pos"""
+			"""Return sample of x at body discretization points"""
 			indices = get_cell_index(agent_interface.get_body_points(body))
 			return x[:, *indices] if x.ndim==3 else x[*indices]
 
@@ -212,9 +213,9 @@ class GridWorld:
 
 		self.agent_interface = agent_interface
 		self.mutation_fn = mutation_fn
-		self.agent_scent_diffusion_kernel = jnp.array([[ 0.1 , 0.1 , 0.1 ],
-													   [ 0.1 , 1.0 , 0.1 ],
-													   [ 0.1 , 0.1 , 0.1 ]], dtype=jnp.float16)
+		self.agent_scent_diffusion_conv = make_chemical_diffusion_convolution(cfg.size, 
+	                                                                          jnp.array([cfg.agent_scent_diffusion_rate]), 
+	                                                                          flow=flow) #type:ignore
 
 	#-------------------------------------------------------------------
 
@@ -459,9 +460,9 @@ class GridWorld:
 		agents = state.agents_states
 		agents_i, agents_j = get_cell_index(agents.body.pos).T
 		agents_alive_grid = jnp.zeros(self.cfg.size).at[agents_i, agents_j].add(agents.alive)
-		agents_scent_field = jsp.signal.convolve(agents_alive_grid, self.agent_scent_diffusion_kernel, mode="same")
+		agents_scent_field = self.agent_scent_diffusion_conv(agents_alive_grid[None])
 		
-		chemical_fields = jnp.concatenate([agents_scent_field[None], chemical_fields],axis=0)
+		chemical_fields = jnp.concatenate([agents_scent_field, chemical_fields],axis=0)
 		chemical_fields = jnp.where(chemical_fields<self.cfg.chemicals_detection_threshold, 0.0, chemical_fields) #C,H,W
 
 		return chemical_fields

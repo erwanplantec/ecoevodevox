@@ -82,7 +82,8 @@ class AgentInterface(eqx.Module):
 		action, motor_energy_loss, motor_state, motor_info = self.decode_policy(policy_state, state.motor_state)
 		# 4. compute energy loss (size, basal, motor, policy, sensory)
 		size_energy_loss = self.size_energy_cost * state.genotype.body_size
-		energy = state.energy - sensory_energy_loss - policy_energy_loss - motor_energy_loss - self.basal_energy_loss - size_energy_loss
+		energy_loss = size_energy_loss + self.basal_energy_loss + motor_energy_loss + policy_energy_loss + sensory_energy_loss
+		energy = state.energy - energy_loss
 
 		state = state.replace(
 			policy_state=policy_state, 
@@ -92,7 +93,10 @@ class AgentInterface(eqx.Module):
 			age=state.age+1  
 		)
 
-		infos = {"motor_energy_loss": motor_energy_loss, "policy_energy_loss": policy_energy_loss, "sensory_energy_loss": sensory_energy_loss, **motor_info}
+		infos = {"motor_energy_loss": motor_energy_loss, 
+				 "policy_energy_loss": policy_energy_loss, 
+				 "sensory_energy_loss": sensory_energy_loss, 
+				 **motor_info}
 
 		return action, state, infos
 	#-------------------------------------------------------------------
