@@ -53,6 +53,9 @@ class HyperRNN(Hypernetwork):
     # ---
     bias: jax.Array
     # ---
+    def __init__(self, latent_dims: int=2, activation_fn: str="tanh", final_activation_fn: str="id", sigma: float=0.1, sigma_is_parameter: bool=False, *, key: jax.Array):
+        super().__init__(latent_dims, activation_fn, final_activation_fn, sigma, sigma_is_parameter, key=key)
+    # ---
     def __call__(self, key: jax.Array) -> RNN:
         z = self.sample_latent(key)
         W = self.network(z)[0]

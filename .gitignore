@@ -5,6 +5,7 @@ src/experimental
 anims/*
 data/*
 configs/dev_cfg.yml
+notebooks/dev.ipynb
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -22,7 +22,7 @@ class FlattenSensoryInterface(SensoryInterface):
 			o = get_edge_values(walls_and_chems)
 			o = jnp.concatenate([o, obs.internal])
 		elif self.subset=="front":
-			o = jnp.ravel(walls_and_chems[:,0,:])
+			o = jnp.ravel(walls_and_chems[:,:,-1])
 			o = jnp.concatenate([o, obs.internal])
 		else:
 			raise ValueError(f"subset {self.subset} is not valid")

@@ -1,3 +1,6 @@
+from .chemicals import ChemicalType, make_chemical_diffusion_convolution
+from .food import FoodType, FoodMap,  make_growth_convolution
+
 from flax.struct import PyTreeNode
 import jax
 import jax.numpy as jnp
@@ -21,7 +24,6 @@ from ..agents.interface import AgentInterface, AgentState, Genotype, Body
 
 # ======================== UTILS =============================
 
-type FoodMap = Bool[Array, "F H W"]
 type KeyArray = jax.Array
 type AgentParams = jax.Array
 type Action = jax.Array
@@ -32,98 +34,7 @@ def get_cell_index(pos: Float16):
 	indices = jnp.floor(pos).astype(jnp.int16)
 	return indices
 
-def make_growth_convolution(env_size: tuple[int,int],
-							reproduction_rates: jax.Array,
-							dmins: jax.Array,
-							dmaxs: jax.Array,
-							inhib: float=-1.0,
-							dtype: type=jnp.float32):
-	"""Creates convolution function for food growth probabilities"""
-	# ---
-	H, W = env_size
-	# ---
-	assert (not H%2) and (not W%2), f"world dimsensions must be even, got {H}x{W}"
-	# ---
-	mH, mW = H//2, W//2
-	L = jnp.mgrid[-mH:mH,-mW:mW]
-	D = jnp.linalg.norm(L, axis=0, keepdims=True)
-
-	growth_kernels = ((D>=dmins[:,None,None]) & (D<=dmaxs[:,None,None])).astype(jnp.float32)
-	growth_kernels = growth_kernels / growth_kernels.sum(axis=(1,2), keepdims=True)
-	growth_kernels = growth_kernels * reproduction_rates[:,None,None]
-	growth_kernels = jnp.where(D<dmins[:,None,None], inhib, growth_kernels); assert isinstance(growth_kernels,jax.Array)
-	growth_kernels_fft = jnp.fft.fft2(jnp.fft.fftshift(growth_kernels, axes=(1,2))).astype(dtype)
-
-	@jax.jit
-	def _conv(F: Bool[Array, "F H W"])->jax.Array:
-		F_fft = jnp.fft.fft2(F.astype(dtype))
-		P = jnp.real(jnp.fft.ifft2(F_fft*growth_kernels_fft))
-		P = jnp.where((P<0)|jnp.isclose(P,0.0), 0.0, P); assert isinstance(P, jax.Array)
-		return P
-
-	return _conv
-
-def make_chemical_diffusion_convolution(env_size: tuple[int,int],
-										diffusion_rates: jax.Array,
-										flow: jax.Array|None=None):
-	"""Creates convolution function for chemical diffusion
-	
-	Args:
-		env_size: tuple[int,int]
-		diffusion_rates: jax.Array
-		flow: jax.Array|None
-	
-	Returns:
-		Callable[[jax.Array], jax.Array]
-	"""
-	# ---
-	H, W = env_size
-	# ---
-	assert (not H%2) and (not W%2), f"world dimsensions must be even, got {H}x{W}"
-	# ---
-	mH, mW = H//2, W//2
-	L = jnp.mgrid[-mH:mH,-mW:mW]
-	D = jnp.sum(jnp.square(L), axis=0, keepdims=True) #1,H,W
-
-	if flow is None:
-		diffusion_kernels = jnp.exp(-D/diffusion_rates[:,None,None])
-	else:
-		flow_norm = jnp.linalg.norm(flow)
-		unit_flow = flow/flow_norm
-		cosines = jnp.sum(L*unit_flow[:,None,None], axis=0) / (jnp.linalg.norm(L,axis=0))
-		cosines = (cosines+1.0) * 0.5
-		diffusion_kernels = jnp.exp(-D / ( cosines * diffusion_rates[:,None,None] * flow_norm + (1-cosines)*0.1))
-
-	diffusion_kernels = jnp.where(jnp.isnan(diffusion_kernels), 1.0, diffusion_kernels) #FIX THIS 
-	
-	diffusion_kernels_fft = jnp.fft.fft2(jnp.fft.fftshift(diffusion_kernels, axes=(1,2)))
-
-	@jax.jit
-	def _conv(C: Float[jax.Array, "C H W"])->Float[jax.Array, "C H W"]:
-		C_fft = jnp.fft.fft2(C)
-		res = jnp.real(jnp.fft.ifft2(C_fft * diffusion_kernels_fft))
-		return res
-
-	return _conv
-
-
 # ============================================================
-
-class ChemicalType(PyTreeNode):
-	"""chemical type definition"""
-	diffusion_rate: Float16 #diffusion rate of chemical in environment
-	is_sparse: Bool # whether the chemical is sparse (i.e. only present in a few cells)
-	emission_rate: Float16 # base probability of emission
-
-class FoodType(PyTreeNode):
-	"""food type definition"""
-	growth_rate: Float32 # growth rate of food
-	dmin: Float32 # minimum distance from food source to start growing
-	dmax: Float32 # maximum distance from food source to stop growing
-	chemical_signature: Float32 # chemical signature of food
-	energy_concentration: Float32 # energy concentration of food
-	spontaneous_grow_prob: Float32 # probability of spontaneous growth
-	initial_density: Float32 # initial density of food
 
 class EnvState(PyTreeNode):
 	agents_states: AgentState # state of agents
@@ -255,6 +166,13 @@ class GridWorld:
 		food_sources = self._init_food(key_food)
 		agents = self._init_agents(key_agent)
 		return EnvState(agents_states=agents, food=food_sources, time=jnp.zeros((), dtype=jnp.uint32), last_agent_id=agents.id_.max())
+
+	# ---
+
+	def _init_food(self, key: jax.Array)->FoodMap:
+		food = jr.bernoulli(key, self.food_types.initial_density[:,None,None], (self.n_food_types, *self.cfg.size))
+		food = jnp.where(jnp.cumsum(food.astype(jnp.uint4),axis=0)>1, False, food)
+		return food
 
 	#-------------------------------------------------------------------
 
@@ -558,13 +476,6 @@ class GridWorld:
 	@property
 	def n_food_types(self):
 		return self.food_types.growth_rate.shape[0]
-
-	def _init_food(self, key)->FoodMap:
-		food = jr.bernoulli(key, self.food_types.initial_density[:,None,None], (self.n_food_types, *self.cfg.size))
-		food = jnp.where(jnp.cumsum(food.astype(jnp.uint4),axis=0)>1, False, food)
-		return food
-
-	# ---
 
 	def _update_food(self, state: EnvState, key: jax.Array):
 		"""Do one step of food growth"""
