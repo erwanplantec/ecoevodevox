@@ -116,7 +116,7 @@ class GridWorld:
 																			flow=flow) #type:ignore
 
 		@jax.jit
-		def _vision_fn(x: jax.Array, body: Body):
+		def _vision_fn(x: jax.Array, body: Body)->jax.Array:
 			"""Return sample of x at body discretization points"""
 			indices = get_cell_index(agent_interface.get_body_points(body))
 			return x[:, *indices] if x.ndim==3 else x[*indices]

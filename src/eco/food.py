@@ -21,7 +21,7 @@ def make_growth_convolution(env_size: tuple[int,int],
                             dmaxs: jax.Array,
                             inhib: float=-1.0,
                             dtype: type=jnp.float32):
-    """Creates convolution function for food growth probabilities"""
+    """Creates convolution function for food growth probabilities using fft convolution"""
     # ---
     H, W = env_size
     # ---

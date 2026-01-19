@@ -7,7 +7,7 @@ class ChemicalType(PyTreeNode):
     """chemical type definition"""
     diffusion_rate: Float16 #diffusion rate of chemical in environment
     is_sparse: Bool # whether the chemical is sparse (i.e. only present in a few cells)
-    emission_rate: Float16 # base probability of emission
+    emission_rate: Float16|None=None # base probability of emission (used if sparse)
 
 def make_chemical_diffusion_convolution(env_size: tuple[int,int],
                                         diffusion_rates: jax.Array,

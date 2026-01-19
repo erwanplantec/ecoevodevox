@@ -340,6 +340,7 @@ class Simulator:
 					steps = 1
 				else:
 					steps = int(args[0])
+				print(f"Simulating {steps} steps...")
 				key_sim, _key = jr.split(key_sim)
 				world_state = self.simulate(world_state, _key, steps)
 
