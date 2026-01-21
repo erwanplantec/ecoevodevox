@@ -1,4 +1,4 @@
-from .base import DevelopmentalModel
+from .core import DevelopmentalModel
 from .rand import RAND
 from .hypernetwork import HyperRNN
 from .direct import DirectRNN, DirectCTRNN

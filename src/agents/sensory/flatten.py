@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from .base import SensoryInterface
+from .core import SensoryInterface
 
 def get_edge_values(x: jax.Array):
 	return jnp.concatenate(
@@ -15,14 +15,13 @@ class FlattenSensoryInterface(SensoryInterface):
 	#-------------------------------------------------------------------
 	def encode(self, obs, policy_state, sensory_state):
 		n = policy_state.v.shape[0]
-		walls_and_chems = jnp.concatenate([obs.walls, obs.chemicals], axis=0)
 		if self.subset=="all":
-			o = jnp.concatenate([jnp.ravel(walls_and_chems), jnp.ravel(obs.internal)], axis=0)
+			o = jnp.concatenate([jnp.ravel(obs.env), obs.internal], axis=0)
 		elif self.subset=="edges":
-			o = get_edge_values(walls_and_chems)
+			o = get_edge_values(obs.env)
 			o = jnp.concatenate([o, obs.internal])
 		elif self.subset=="front":
-			o = jnp.ravel(walls_and_chems[:,:,-1])
+			o = jnp.ravel(obs.env[:,:,-1])
 			o = jnp.concatenate([o, obs.internal])
 		else:
 			raise ValueError(f"subset {self.subset} is not valid")

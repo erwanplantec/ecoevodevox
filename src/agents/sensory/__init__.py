@@ -1,4 +1,4 @@
-from .base import SensoryInterface
+from .core import SensoryInterface
 from .spatially_embedded import SpatiallyEmbeddedSensoryInterface
 from .flatten import FlattenSensoryInterface
 

@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import equinox as eqx
 from typing import Callable
 
-from .base import Policy, NN, SENN
+from .core import Policy, NN, SENN
 
 class CTRNN(NN):
     tau: jax.Array

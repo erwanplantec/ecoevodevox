@@ -2,8 +2,7 @@ from flax.struct import PyTreeNode
 from jaxtyping import PyTree
 import jax
 
-from ..core import *
-
+from ..core import Observation, PolicyState, SensoryState, PolicyInput, Float16
 
 class SensoryInterface(PyTreeNode):
 	#-------------------------------------------------------------------

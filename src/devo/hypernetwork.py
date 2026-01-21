@@ -6,7 +6,7 @@ import equinox.nn as nn
 from jaxtyping import Float
 
 from ..agents.nn.rnn import RNN
-from .base import DevelopmentalModel
+from .core import DevelopmentalModel
 
 activation_functions = {"tanh": jnn.tanh, "relu": jnn.relu, "sigmoid": jnn.sigmoid, "id": lambda x: x}
 

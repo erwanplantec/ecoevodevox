@@ -4,6 +4,9 @@ import equinox as eqx
 from jaxtyping import Float, PyTree
 from typing import Callable
 
+
+from ..core import PolicyState
+
 class NN(PyTreeNode):
 	v: jax.Array
 	W: jax.Array
@@ -13,8 +16,6 @@ class NN(PyTreeNode):
 
 class SENN(NN):
 	x: jax.Array
-
-type PolicyState=PyTree
 
 class Policy(eqx.Module):
 	#-------------------------------------------------------------------

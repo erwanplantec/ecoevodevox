@@ -3,7 +3,7 @@ import jax.nn as jnn
 from typing import Callable
 from jaxtyping import Float
 
-from .base import Policy, NN, SENN
+from .core import Policy, NN, SENN
 
 RNN = NN
 SERNN = SENN

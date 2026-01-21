@@ -7,7 +7,7 @@ from flax import struct
 from jaxtyping import Float
 import numpy as np
 
-from .base import MotorInterface, Action, Body, PolicyState, MotorState, Info
+from .core import MotorInterface, Action, Body, PolicyState, MotorState, Info
 
 
 class CiliatedMotorState(struct.PyTreeNode):

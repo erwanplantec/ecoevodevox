@@ -1,4 +1,4 @@
-from .base import NN, SENN, Policy
+from .core import NN, SENN, Policy
 from .rnn import RNN, SERNN, RNNPolicy
 from .ctrnn import CTRNNPolicy, CTRNN, SECTRNN
 

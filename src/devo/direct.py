@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 
-from .base import DevelopmentalModel
+from .core import DevelopmentalModel
 from ..agents.nn import CTRNNPolicy, CTRNN, RNN
 
 class DirectCTRNN(DevelopmentalModel):

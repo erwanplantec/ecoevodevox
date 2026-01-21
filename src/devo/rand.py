@@ -6,8 +6,9 @@ import equinox as eqx
 import equinox.nn as nn
 from flax.struct import PyTreeNode
 from jax.flatten_util import ravel_pytree
+from typing import Callable
 
-from .base import DevelopmentalModel
+from .core import DevelopmentalModel
 from ..agents.nn.ctrnn import SECTRNN
 from ..agents.nn.rnn import SERNN
 
@@ -36,19 +37,19 @@ type Network=RNNState|CTRNNState
 
 class RAND(DevelopmentalModel):
     # --- GRN prms
-    W_in: nn.Linear
-    W_ex: nn.Linear
+    W_in: jax.Array
+    W_ex: jax.Array
     W_migr: jax.Array
     W_sign: jax.Array
     W_syn: jax.Array
-    W_neur: nn.Linear|None
+    W_neur: nn.Linear
     bias: jax.Array
     tau: jax.Array
     O_syn: jax.Array
     # ---
     nb_neurons: int
     max_neurons: int
-    genes_shaper: callable
+    genes_shaper: Callable
     total_genes: int
     max_mitosis: int
     mitotic_factor_threshold: float
@@ -59,8 +60,8 @@ class RAND(DevelopmentalModel):
     dev_iters: int
     network_type: str
     expression_bounds: tuple[float, float]
-    motor_activation_fn: callable
-    sensory_activation_fn: callable
+    motor_activation_fn: Callable
+    sensory_activation_fn: Callable
     gene_noise_scale: float
     position_noise_scale: float
     # ---
@@ -293,8 +294,8 @@ class RAND(DevelopmentalModel):
         synaptic_proteins = S_syn@self.W_syn
         get_weigth = lambda O: synaptic_proteins@O@synaptic_proteins.T
         W = jax.vmap(get_weigth)(self.O_syn).sum(0)
-        W = jnp.where(state.mask[None]*state.mask[:,None], W, 0.)
-        W = jnp.where(jnp.abs(W)>1e-3, W, 0.)
+        W = jnp.where(state.mask[None]*state.mask[:,None], W, 0.); assert isinstance(W, jax.Array)
+        W = jnp.where(jnp.abs(W)>1e-3, W, 0.0)
         sensory = self.sensory_activation_fn(S_sensory)
         motor = self.motor_activation_fn(S_motor)
         v = jnp.zeros((self.max_neurons,))
@@ -309,6 +310,9 @@ class RAND(DevelopmentalModel):
         elif self.network_type=="rnn":
             bias = jax.vmap(self.W_neur)(S_neurons)
             return RNNState(v=v, W=W, mask=mask, x=X, s=sensory, m=motor, b=bias)
+
+        else:
+            raise ValueError(f"{self.network_type} is not a valid network type")
     # ---
     def __call__(self, key: jax.Array)->Network:
         """Run the complete development process and return the resulting network.

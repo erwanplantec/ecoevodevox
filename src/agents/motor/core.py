@@ -1,8 +1,9 @@
+from typing import Any
 from flax.struct import PyTreeNode
-from jaxtyping import PyTree
+from jaxtyping import PyTree, Float
+import jax
 
-from ..core import *
-
+from ..core import Action, PolicyState, MotorState, Info, Body
 
 class MotorInterface(PyTreeNode):
 	#-------------------------------------------------------------------

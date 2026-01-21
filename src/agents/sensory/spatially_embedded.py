@@ -1,5 +1,5 @@
 from ..core import Observation, PolicyState
-from .base import SensoryInterface
+from .core import SensoryInterface
 
 import jax
 from jax import numpy as jnp, random as jr, nn as jnn

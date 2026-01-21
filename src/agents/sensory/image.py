@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from .base import SensoryInterface, PolicyState
+from .core import SensoryInterface, PolicyState
 
 class ImageSensoryInterface(SensoryInterface):
 	"""A sensory interface that transforms the observation into a C-channel image.
