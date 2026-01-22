@@ -12,6 +12,8 @@ import jax, jax.numpy as jnp, jax.random as jr
 from jax.experimental import io_callback
 import random
 import string
+import shutil
+import os
 
 from .metrics import host_log_transform, metrics_fn
 
@@ -137,5 +139,15 @@ class Logger:
                 lambda *a, **k: jnp.zeros((), dtype=bool),
                 sim_state.agents_states, sim_state.time, key
             )
+    # ---
+
+    def finish(self):
+        if self.wandb_log:
+            wandb.finish()
+        if self.ckpt_dir is not None or self.sampling_dir is not None:
+            data_dir = f"data/{self.name}"
+            shutil.make_archive(data_dir, "zip", "data", self.name)
+            shutil.rmtree(data_dir, ignore_errors=True)
+
         
 

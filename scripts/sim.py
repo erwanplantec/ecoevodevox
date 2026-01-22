@@ -18,6 +18,7 @@ def main():
 	if args.debug:
 		state = simulator.initialize(key=jr.key(1))
 		state, trace = simulator.rollout(state, 16, key=jr.key(0))
+		simulator.finish()
 
 	else:
 

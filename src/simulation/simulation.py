@@ -1,6 +1,6 @@
 from jaxtyping import PyTree
 from .metrics import host_log_transform, metrics_fn
-from ..eco.gridworld import EnvState, GridWorld, get_cell_index
+from ..eco.gridworld import GridWorld, get_cell_index
 from ..agents.interface import AgentInterface, Body, Action
 from ..evo import MutationModel, Genotype
 from .core import SimulationState
@@ -12,8 +12,6 @@ import jax
 from jax import numpy as jnp, random as jr
 from jax.sharding import PartitionSpec as P, NamedSharding
 import pickle
-from functools import partial
-import os
 
 #=======================================================================
 
@@ -286,6 +284,12 @@ class Simulator:
 
         sim_state, trace = jax.lax.scan(_step, sim_state, jr.split(key, steps))
         return sim_state, trace
+
+    # ------------------------------------------------------------------
+
+    def finish(self):
+        if self.logger is not None:
+            self.logger.finish()
 
     #-------------------------------------------------------------------
     
