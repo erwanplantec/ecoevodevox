@@ -1,14 +1,15 @@
-from ..eco.gridworld import EnvState
+from .core import SimulationState
 
 import jax
 import numpy as np
 
 
-def metrics_fn(state: EnvState, step_data: dict)->dict:
+def metrics_fn(sim_state: SimulationState, step_data: dict)->dict:
     """computes metrics from world state and step_data to log"""
-    agents = state.agents_states
+    agents = sim_state.agents_states
+    env = sim_state.env_state
     food_levels = {
-        f"food_{i}": state.food[i].sum() for i in range(state.food.shape[0])
+        f"food_{i}": env.food[i].sum() for i in range(env.food.shape[0])
     }
     data = {
         "alive": agents.alive,
@@ -18,7 +19,7 @@ def metrics_fn(state: EnvState, step_data: dict)->dict:
         **step_data,
         "ages": agents.age,
         **food_levels,
-        "total_food": state.food.sum(),
+        "total_food": env.food.sum(),
         "network_sizes": agents.policy_state.mask.sum(-1)
     }
     return data

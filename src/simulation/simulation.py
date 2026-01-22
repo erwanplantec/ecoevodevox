@@ -1,3 +1,4 @@
+from jaxtyping import PyTree
 from .metrics import host_log_transform, metrics_fn
 from ..eco.gridworld import EnvState, GridWorld, get_cell_index
 from ..agents.interface import AgentInterface, Body, Action
@@ -91,10 +92,9 @@ class Simulator:
 
     #-------------------------------------------------------------------
 
-    @partial(jax.jit, static_argnums=(0,))
     def step(self, sim_state: SimulationState, *, key: jax.Array) -> tuple[SimulationState, dict]:
 
-        key_food, key_obs, key_agents, key_death_and_repr = jr.split(key, 4)
+        key_food, key_obs, key_agents, key_death_and_repr, key_logger = jr.split(key, 5)
         
         # --- 1. update food ---
         env_state = self.world.update_food(sim_state.env_state, key_food)
@@ -131,6 +131,11 @@ class Simulator:
 
         step_data = {**death_and_reproduction_data,
                      **agents_step_data}
+        sim_state = sim_state.replace(time=sim_state.time+1)
+
+        # --- 7. do logging stuff ---
+        if self.logger is not None:
+            self.logger.log(sim_state, step_data, key_logger)
 
         return jax.lax.with_sharding_constraint(sim_state, self.state_shardings), step_data
 
@@ -270,6 +275,18 @@ class Simulator:
     def get_body_points(self, body: Body):
         return self.agent_interface.get_body_points(body)
 
+    # ------------------------------------------------------------------
+
+    def rollout(self, sim_state: SimulationState, steps: int, with_trace: bool=False, *, key: jax.Array) -> tuple[SimulationState, PyTree|None]:
+
+        def _step(sim_state, key):
+            new_sim_state, data = self.step(sim_state, key=key)
+            aux = dict(sim_state=sim_state, step_data=data) if with_trace else None
+            return new_sim_state, aux
+
+        sim_state, trace = jax.lax.scan(_step, sim_state, jr.split(key, steps))
+        return sim_state, trace
+
     #-------------------------------------------------------------------
     
     def load_ckpt(self, filename: str):
@@ -298,6 +315,7 @@ class Simulator:
                         metrics_fn=metrics_fn,
                         host_log_transform=host_log_transform,
                         wandb_project=log_cfg.get("wandb_project", "eedx"))
+        logger.initialize(cfg)
         # ---
         sim_cfg = SimulationConfig(**cfg["simulation"])
         simulator = Simulator(cfg=sim_cfg, 

@@ -16,12 +16,8 @@ def main():
 	simulator, cfg = Simulator.from_config_file(args.filename)
 
 	if args.debug:
-		world = simulator.world
-		state = world.init(jr.key(1))
-		new_state, _ = world.step(state, jr.key(0))
-		print(jax.tree.map(lambda a,b: a.dtype==b.dtype, state.agents_states, new_state.agents_states))
-
-		plt.scatter(*state.agents_states.body.pos.T); plt.show()
+		state = simulator.initialize(key=jr.key(1))
+		state, trace = simulator.rollout(state, 16, key=jr.key(0))
 
 	else:
 

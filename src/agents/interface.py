@@ -146,7 +146,8 @@ class AgentInterface(eqx.Module):
 	# ------------------------------------------------------------------
 	def update_after_reproduction(self, state: AgentState, has_reproduced: Bool) -> AgentState:
 		return state.replace(energy = state.energy - (has_reproduced * self.cfg.reproduction_energy_cost),
-		                     time_above_threshold = jnp.where(has_reproduced, 0, state.time_above_threshold))
+		                     time_above_threshold = jnp.where(has_reproduced, 0, state.time_above_threshold),
+		                     n_offsprings = jnp.where(has_reproduced, state.n_offsprings+1, state.n_offsprings))
 	# ------------------------------------------------------------------
 	def is_eating(self, state: AgentState)->Bool:
 		return state.alive & (state.energy < self.cfg.max_energy)

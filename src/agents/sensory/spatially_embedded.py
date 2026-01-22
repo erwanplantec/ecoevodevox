@@ -9,8 +9,6 @@ from typing import Callable
 from flax.struct import PyTreeNode
 from jaxtyping import Bool, Float, PyTree
 
-type Observation=PyTree
-
 class State(PyTreeNode):
 	"""A state for a spatially embedded sensory interface."""
 	on_border: Bool
@@ -93,17 +91,22 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 			AssertionError: If policy_state is missing required attributes (x, v, s, m).
 		"""
 
-		C = obs.chemicals # mC, W, W
-		W = obs.walls
-		nC, D, _ = C.shape
-		nW, *_ = W.shape
-		nI, *_ = obs.internal.shape
+		C = obs.env
 
 		i, j = sensory_state.indices.T
 		Ic = jnp.where(sensory_state.on_border, jnp.sum(C[:,i,j].T * sensory_state.s[:,:nC], axis=1), 0.0) # chemical input #type:ignore
-		Iw = jnp.where(sensory_state.on_border, jnp.sum(W[:,i,j].T * sensory_state.s[:,nC:nC+nW], axis=1), 0.0) # walls input #type:ignore
 		Ii = jnp.sum(sensory_state.s[:, nC+nW:nC+nW+nI] * obs.internal[None], axis=1) # internal input #type:ignore
 
-		I = Ic + Iw + Ii
+		I = Ic + Ii
 
 		return I, sensory_state.energy_cost, sensory_state, {}
+
+
+
+
+
+
+
+
+
+		

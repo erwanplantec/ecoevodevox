@@ -1,3 +1,5 @@
+from .core import SimulationState
+
 import os
 from typing import Callable
 import wandb
@@ -6,7 +8,7 @@ try:
     import _pickle as pickle
 except:
     import pickle
-import jax, jax.numpy as jnp
+import jax, jax.numpy as jnp, jax.random as jr
 from jax.experimental import io_callback
 import random
 import string
@@ -45,6 +47,7 @@ class Logger:
         # ----
         self.wandb_log = wandb_log
         self.wandb_project = wandb_project
+        self.metrics_fn = metrics_fn
         # ---
         self.ckpt_freq = ckpt_freq
         if ckpt_freq is not None and ckpt_freq>0:
@@ -52,7 +55,7 @@ class Logger:
             os.makedirs(ckpt_dir, exist_ok=True)
         else:
             ckpt_dir = None
-        self.ckpt_dit = ckpt_dir
+        self.ckpt_dir = ckpt_dir
         # ---
         self.sampling_freq = sampling_freq
         self.sampling_size = sampling_size
@@ -65,10 +68,10 @@ class Logger:
         # ---
 
         def _log_clbk(data):
-            if not wandb_log: return jnp.zeros((), dtype=bool)
+            if not wandb_log: return False
             data = host_log_transform(data)
             wandb.log(data)
-            return jnp.zeros((), dtype=bool)
+            return False
         self._log_clbk = _log_clbk
 
         def _ckpt_clbk(sim_state):
@@ -77,49 +80,62 @@ class Logger:
             filename = f"{ckpt_dir}/{int(time)}.pickle"
             with open(filename, "wb") as file:
                 pickle.dump(sim_state, file)
-            return jnp.zeros((),dtype=bool)
+            return False
         self._ckpt_clbk = _ckpt_clbk
 
         def _sample_clbk(sample, time):
-            if sampling_freq is None: return jnp.zeros((), dtype=bool)
+            if sampling_freq is None: return False
             filename = f"{sampling_dir}/{int(time)}.pickle"
             with open(filename, "wb") as file:
                 pickle.dump(sample, file)
-            return jnp.zeros((),dtype=bool)
+            return False
+
         self._sample_clbk = _sample_clbk
     # ---
 
     def initialize(self, cfg: dict):
 
         if self.wandb_log:
-            wandb.init(project=self.wandb_project)
+            wandb.init(project=self.wandb_project, name=self.name, config=cfg)
 
     # ---
 
-    def log(self, sim_state, step_data):
-        if log:
-            data = metrics_fn(sim_state, step_data)
-            io_callback(self._log_clbk, jax.ShapeDtypeStruct((),bool), data)
-        if ckpt_dir:
+    def log(self, sim_state: SimulationState, step_data, key):
+        
+        # --- 1. data logging ---
+        if self.wandb_log:
+
+            data = self.metrics_fn(sim_state, step_data)
+            io_callback(self._log_clbk, jnp.zeros((), dtype=bool), data)
+        
+        # --- 2. do ckpt ---
+        if self.ckpt_dir is not None:
+
             assert isinstance(self.ckpt_freq, int)
+
             _ = jax.lax.cond(
-                jnp.mod(state.time, ckpt_freq)==0,
-                lambda s: io_callback(self._ckpt_clbk, jax.ShapeDtypeStruct((),bool), s),
+                jnp.mod(sim_state.time, self.ckpt_freq)==0,
+                lambda s: io_callback(self._ckpt_clbk, jax.ShapeDtypeStruct((), bool), s),
                 lambda *a, **k: jnp.zeros((), dtype=bool),
-                {"env_state": state, "key": key}
+                sim_state
             )
-        if sampling_dir:
-            assert isinstance(sampling_freq, int)
+
+        # --- 3. save sample of agents ---
+        if self.sampling_dir is not None:
+
+            assert isinstance(self.sampling_freq, int)
+
             def _sample_and_clbk(agents, time, key):
                 p = agents.alive / agents.alive.sum()
-                sample_ids = jr.choice(key, agents.alive.shape[0], shape=(sampling_size,), p=p)
+                sample_ids = jr.choice(key, agents.alive.shape[0], shape=(self.sampling_size,), p=p)
                 sample = jax.tree.map(lambda x: x[sample_ids], agents)
-                return io_callback(_sample_clbk, jax.ShapeDtypeStruct((),bool), sample, time)
+                return io_callback(self._sample_clbk, jax.ShapeDtypeStruct((),bool), sample, time)
+
             _ = jax.lax.cond(
-                jnp.mod(state.time, sampling_freq)==0,
+                jnp.mod(sim_state.time, self.sampling_freq)==0,
                 _sample_and_clbk,
                 lambda *a, **k: jnp.zeros((), dtype=bool),
-                state.agents_states, state.time, key
+                sim_state.agents_states, sim_state.time, key
             )
         
 
