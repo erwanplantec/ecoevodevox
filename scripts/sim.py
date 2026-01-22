@@ -1,10 +1,9 @@
-
 import argparse
 import jax
 from jax import numpy as jnp, random as jr, nn as jnn
 import wandb
 import matplotlib.pyplot as plt
-from src.simulation import Simulator
+from src.simulation import Simulator, run_interactive
 
 
 def main():
@@ -22,13 +21,10 @@ def main():
 
 	else:
 
-		if cfg["log"]: 
-			wandb.init(project=cfg["project"], config=cfg)
+		if simulator.logger is not None:
+			simulator.logger.initialize(cfg)
 
-		simulator.run_interactive()
-
-		if cfg["log"]:
-			wandb.finish()
+		run_interactive(simulator, key=jr.key(cfg["seed"]))
 
 	
 

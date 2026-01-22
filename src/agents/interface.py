@@ -131,7 +131,7 @@ class AgentInterface(eqx.Module):
 		                   sensory_state=sensory_state,
 		                   policy_state=policy_state,
 		                   alive=jnp.ones((), dtype=jnp.bool),
-		                   age=jnp.zeros((), dtype=jnp.uint16),
+		                   age=jnp.ones((), dtype=jnp.uint16),
 		                   energy=self.cfg.init_energy,
 		                   time_above_threshold=jnp.zeros((), dtype=jnp.uint16),
 		                   time_below_threshold=jnp.zeros((), dtype=jnp.uint16),

@@ -1,4 +1,5 @@
 from jaxtyping import PyTree
+from matplotlib.pyplot import stem
 from .metrics import host_log_transform, metrics_fn
 from ..eco.gridworld import GridWorld, get_cell_index
 from ..agents.interface import AgentInterface, Body, Action
@@ -92,11 +93,33 @@ class Simulator:
 
     def step(self, sim_state: SimulationState, *, key: jax.Array) -> tuple[SimulationState, dict]:
 
-        key_food, key_obs, key_agents, key_death_and_repr, key_logger = jr.split(key, 5)
+        key_food, key_agents, key_logger = jr.split(key, 3)
         
         # --- 1. update food ---
         env_state = self.world.update_food(sim_state.env_state, key_food)
         sim_state = sim_state.replace(env_state=env_state)
+
+        # --- 2. agents step ---
+
+        sim_state, agents_step_data = self.step_agents(sim_state, key=key_agents)
+
+        # --- 3. update state ---
+
+        step_data = {**agents_step_data}
+        sim_state = sim_state.replace(time=sim_state.time+1)
+
+        # --- 7. do logging stuff ---
+        if self.logger is not None:
+            self.logger.log(sim_state, step_data, key_logger)
+
+        return jax.lax.with_sharding_constraint(sim_state, self.state_shardings), step_data
+
+
+    #-------------------------------------------------------------------
+
+    def step_agents(self, sim_state: SimulationState, *, key: jax.Array)->tuple[SimulationState, dict]:
+
+        key_obs, key_agents, key_death_and_repr = jr.split(key, 3)
 
         # --- 2. retrieve world infos for agents ---
         bodies_points = jax.vmap(self.get_body_points)(sim_state.agents_states.body) # N, 2, R, R
@@ -110,7 +133,7 @@ class Simulator:
             .add(agents_emissions.transpose(1,0,2,3).reshape(self.world.nb_chemicals,-1))
         )
         
-        env_obs = self.world.get_agents_observations(env_state, bodies_points, agents_chemical_sources, key=key_obs)
+        env_obs = self.world.get_agents_observations(sim_state.env_state, bodies_points, agents_chemical_sources, key=key_obs)
 
         # --- 3. update agents internal states and retrieve action ---
         actions, agents_states, agents_step_data = jax.vmap(self.agent_interface.step)(
@@ -127,18 +150,9 @@ class Simulator:
         # --- 6. manage deaths and reproductions
         sim_state, death_and_reproduction_data = self.death_and_reproduction(sim_state, key_death_and_repr)
 
-        step_data = {**death_and_reproduction_data,
-                     **agents_step_data}
-        sim_state = sim_state.replace(time=sim_state.time+1)
+        return sim_state, {**agents_step_data, **death_and_reproduction_data}
 
-        # --- 7. do logging stuff ---
-        if self.logger is not None:
-            self.logger.log(sim_state, step_data, key_logger)
-
-        return jax.lax.with_sharding_constraint(sim_state, self.state_shardings), step_data
-
-
-    #-------------------------------------------------------------------
+    # ------------------------------------------------------------------
 
     def apply_agents_actions(self, actions: Action, sim_state: SimulationState) -> SimulationState:
         """move agents according to actions and apply effects of env (walls)"""

@@ -26,15 +26,23 @@ def metrics_fn(sim_state: SimulationState, step_data: dict)->dict:
 
 def host_log_transform(data: dict)->dict:
     data = jax.tree.map(np.asarray, data)
+    masked_data = {}
     mask = data["alive"]
-    avg_data = {}
+    reduced_data = {}
     for k, v in data.items():
-        if k=="alive" or not v.shape:
-            continue
-        if v.shape[0]==mask.shape[0]:
-            data[k] = v[mask]
-            avg_data[f"{k} (avg)"] = np.mean(data[k])
-    data["reproduction_rates"] = data["offsprings"] / data["ages"]
-    del data["alive"] 
-    data = {**data, **avg_data}
+        if k=="alive": continue
+        if not v.shape:
+            masked_data[k] = v
+        elif v.shape[0]==mask.shape[0]:
+            arr = v[mask]
+            arr_max, arr_min, arr_avg, arr_var = np.max(arr), np.min(arr), np.mean(arr), np.var(arr)
+            reduced_data[f"{k} (avg)"] = arr_avg
+            reduced_data[f"{k} (max)"] = arr_max
+            reduced_data[f"{k} (min)"] = arr_min
+            reduced_data[f"{k} (var)"] = arr_var
+            masked_data[k] = arr
+            # if (~np.isnan(arr_min)) and (~np.isnan(arr_max)):
+            #     data[k] = arr
+    masked_data["reproduction_rates"] = masked_data["offsprings"] / masked_data["ages"]
+    data = {**masked_data, **reduced_data}
     return data
