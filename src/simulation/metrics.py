@@ -29,6 +29,8 @@ def host_log_transform(data: dict)->dict:
     masked_data = {}
     mask = data["alive"]
     reduced_data = {}
+    if not np.any(mask):
+        return {"population": 0}
     for k, v in data.items():
         if k=="alive": continue
         if not v.shape:
