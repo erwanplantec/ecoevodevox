@@ -40,6 +40,7 @@ class Logger:
             name = name
         else:
             name = get_date_string()
+        os.makedirs("data", exist_ok=True)
         if name in os.listdir("data"):
             print(f"name {name} is already used (found in data folder).")
             name = get_date_string()
