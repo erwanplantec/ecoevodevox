@@ -3,9 +3,9 @@ from jax import numpy as jnp, random as jr, nn as jnn
 from flax.struct import PyTreeNode
 from jaxtyping import Float
 
-from ..agents.core import AgentState, PolicyParams, Genotype, Body
+from ..agents.core import AgentState, NNParams, Genotype, Body
 from ..agents.interface import AgentInterface
-from ..agents.nn.base import Policy
+from ..agents.nn.base import NN
 from .gridworld import EnvState, get_cell_index, Observation
 
 class MiniAgentState(AgentState):
@@ -25,7 +25,7 @@ class MiniEnv:
 		self.grid_size = grid_size
 		self.agent_interface = agent_interface
 	#-------------------------------------------------------------------
-	def reset(self, params: PolicyParams, key: jax.Array)->MiniEnvState:
+	def reset(self, params: NNParams, key: jax.Array)->MiniEnvState:
 		raise NotImplementedError
 	#-------------------------------------------------------------------
 	def init_agent_state(self, genotype: Genotype, key: jax.Array)->MiniAgentState:
@@ -54,7 +54,7 @@ class MiniEnv:
 		obs = state.state_grid[:,*indices]
 		return Observation(obs, jnp.asarray(0.0), jnp.zeros((1, *obs.shape[1:])))
 	#-------------------------------------------------------------------
-	def rollout(self, params: PolicyParams, steps: int,  key: jax.Array)->MiniEnvState:
+	def rollout(self, params: NNParams, steps: int,  key: jax.Array)->MiniEnvState:
 		def _step(state, key):
 			new_state = self.step(state, key)
 			return new_state, state
@@ -63,13 +63,13 @@ class MiniEnv:
 		_, states = jax.lax.scan(_step, state, jr.split(key_roll, steps))
 		return states
 	#-------------------------------------------------------------------
-	def evaluate(self, params: PolicyParams, key: jax.Array)->tuple[Float,dict]:
+	def evaluate(self, params: NNParams, key: jax.Array)->tuple[Float,dict]:
 		raise NotImplementedError
 
 
 class MoveTrivialEnv(MiniEnv):
 	#-------------------------------------------------------------------
-	def reset(self, params: PolicyParams, key: jax.Array) -> MiniEnvState:
+	def reset(self, params: NNParams, key: jax.Array) -> MiniEnvState:
 		k1, k2 = jr.split(key)
 
 		genotype = Genotype(params, 2.0)
@@ -79,7 +79,7 @@ class MoveTrivialEnv(MiniEnv):
 
 		return MiniEnvState(grid, agent_state)
 	#-------------------------------------------------------------------
-	def evaluate(self, params: PolicyParams, key: jax.Array) -> tuple[Float, dict]:
+	def evaluate(self, params: NNParams, key: jax.Array) -> tuple[Float, dict]:
 		state = self.rollout(params, 32, key)
 		return jnp.linalg.norm(state.agent_state.body.pos), {}
 
@@ -96,7 +96,7 @@ class Gather(MiniEnv):
 		super().__init__(grid_size, agent_interface)
 		self.density=density
 	#-------------------------------------------------------------------
-	def reset(self, params: PolicyParams, key: jax.Array) -> GatherState:
+	def reset(self, params: NNParams, key: jax.Array) -> GatherState:
 		k1, k2 = jr.split(key)
 
 		genotype = Genotype(params, 2.0)
@@ -114,7 +114,7 @@ class Gather(MiniEnv):
 		chems = jax.scipy.signal.convolve2d(food, diff_kernel)[None]
 		return GatherState(chems, state.agent_state, food)
 	#-------------------------------------------------------------------
-	def evaluate(self, params: PolicyParams, key: jax.Array) -> tuple[Float, dict]:
+	def evaluate(self, params: NNParams, key: jax.Array) -> tuple[Float, dict]:
 		states: GatherState = self.rollout(params, 32, key)
 		return -jnp.sum(states.food[-1]), {}
 
@@ -127,7 +127,7 @@ class ChemotaxisEnv(MiniEnv):
 		self.sigma = sigma
 		self.move_bonus = move_bonus
 	#-------------------------------------------------------------------
-	def reset(self, params: PolicyParams, key: jax.Array)->MiniEnvState:
+	def reset(self, params: NNParams, key: jax.Array)->MiniEnvState:
 
 		k1, k2 = jr.split(key)
 
@@ -149,7 +149,7 @@ class ChemotaxisEnv(MiniEnv):
 
 		return MiniEnvState(chem_grid[None], agent_state)
 	#-------------------------------------------------------------------
-	def evaluate(self, params: PolicyParams, key: jax.Array) -> tuple[Float, dict]:
+	def evaluate(self, params: NNParams, key: jax.Array) -> tuple[Float, dict]:
 		states = self.rollout(params, 32, key)
 		grid = states.state_grid[0,0]
 		i, j = get_cell_index(states.agent_state.body.pos).T #T,2

@@ -1,13 +1,17 @@
-from .core import NN, SENN, Policy
-from .rnn import RNN, SERNN, RNNPolicy
-from .ctrnn import CTRNNPolicy, CTRNN, SECTRNN
+from .ctrnn import CTRNN
+from .rnn import RNN
+from .rand import RAND_CTRNN
+from .hypernetwork import HyperRNN
+from .core import NeuralModel
 
 import equinox as eqx
 from jax.flatten_util import ravel_pytree
 
-nn_models = {
-	"rnn": RNNPolicy,
-	"ctrnn": CTRNNPolicy,
+neural_models = {
+	"rnn": RNN,
+	"ctrnn": CTRNN,
+	"rand_ctrnn": RAND_CTRNN,
+	"hyper_rnn": HyperRNN
 }
 
 def make_apply_init(model, apply_method: str="__call__", init_method: str="init", reshape_prms: bool=False):

@@ -2,13 +2,7 @@ from .chemicals import ChemicalType, make_chemical_diffusion_convolution
 from .food import FoodType, FoodMap,  make_growth_convolution
 
 from flax.struct import PyTreeNode
-import jax
-import jax.numpy as jnp
-import jax.random as jr
-import jax.scipy as jsp
-import equinox as eqx
-from celluloid import Camera
-
+import jax, jax.numpy as jnp, jax.random as jr, jax.nn as jnn
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
@@ -20,7 +14,7 @@ from jaxtyping import (
 	UInt32,
 	Float16, Float32
 )
-from ..agents.interface import Body
+from ..devo.core import Body
 
 # ======================== UTILS =============================
 

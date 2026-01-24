@@ -1,5 +1,5 @@
 from ..eco.gridworld import EnvState
-from ..agents.interface import AgentState
+from ..devo.core import AgentState
 
 from flax.struct import PyTreeNode
 import jax

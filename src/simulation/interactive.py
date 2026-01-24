@@ -66,7 +66,7 @@ def run_interactive(simulator: Simulator, sim_state: SimulationState|None=None, 
 
         elif cmd == "q":
             simulator.finish()
-            break
+            return sim_state
 
         # ---
 

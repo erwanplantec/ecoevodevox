@@ -1,23 +1,6 @@
-from .core import DevelopmentalModel
-from .rand import RAND
-from .hypernetwork import HyperRNN
-from .direct import DirectRNN, DirectCTRNN
+from .interface import AgentInterface
+from .motor import motor_interfaces, MotorInterface
+from .sensory import sensory_interfaces, SensoryInterface
+from .nn import neural_models, NeuralModel, make_apply_init
+from .core import *
 
-import jax
-
-
-class DummyEncodingModel(DevelopmentalModel):
-	#-------------------------------------------------------------------
-	def __init__(self, *args, **kwargs):
-		pass
-	#-------------------------------------------------------------------
-	def __call__(self, key: jax.Array|None=None): #type:ignore
-		return None
-
-encoding_models = {
-	"rand": RAND,
-	"hyper_rnn": HyperRNN,
-	"direct_rnn": DirectRNN,
-	"direct_ctrnn": DirectCTRNN,
-	"dummy": DummyEncodingModel,
-}

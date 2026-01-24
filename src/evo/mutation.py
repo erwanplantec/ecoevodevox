@@ -7,7 +7,7 @@ from jaxtyping import PyTree
 
 from jax.flatten_util import ravel_pytree
 
-from .core import MutationModel, Genotype, PolicyParams
+from .core import MutationModel, Genotype, NeuralParams
 
 
 class GeneralizedMutation(MutationModel):
@@ -26,11 +26,11 @@ class GeneralizedMutation(MutationModel):
 		super().__init__(sigma_size, genotype_like)
 		self.sigma = sigma
 		self.p_mut = p_mut
-		flat_params, self.reshaper = ravel_pytree(genotype_like.policy_params)
+		flat_params, self.reshaper = ravel_pytree(genotype_like.neural_params)
 		self.num_prms = len(flat_params)
 		self.sigma_size = sigma_size
 	#-------------------------------------------------------------------
-	def mutate_policy_params(self, params: PolicyParams, key: jax.Array) -> PolicyParams:
+	def mutate_neural_params(self, params: NeuralParams, key: jax.Array) -> NeuralParams:
 		k_mut, k_locs = jr.split(key)
 		epsilon = jr.normal(k_mut, (self.num_prms,)) * self.sigma
 		if self.p_mut > 0.0:

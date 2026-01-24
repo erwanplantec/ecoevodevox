@@ -3,11 +3,11 @@ from flax.struct import PyTreeNode
 from jaxtyping import PyTree, Float
 import jax
 
-from ..core import Action, PolicyState, MotorState, Info, Body
+from ..core import Action, NeuralState, MotorState, Info, Body
 
 class MotorInterface(PyTreeNode):
 	#-------------------------------------------------------------------
-	def decode(self, policy_state: PolicyState, motor_state: MotorState)->tuple[Action,Float,MotorState,Info]:
+	def decode(self, policy_state: NeuralState, motor_state: MotorState)->tuple[Action,Float,MotorState,Info]:
 		"""decodes policy state into action"""
 		raise NotImplementedError
 	#-------------------------------------------------------------------
@@ -15,6 +15,6 @@ class MotorInterface(PyTreeNode):
 		"""computes effect of action"""
 		raise NotImplementedError
 	#-------------------------------------------------------------------
-	def init(self, policy_state: PolicyState, key: jax.Array)->MotorState: 
+	def init(self, policy_state: NeuralState, *, key: jax.Array)->MotorState: 
 		return None
 	#-------------------------------------------------------------------

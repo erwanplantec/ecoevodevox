@@ -1,3 +1,4 @@
+from typing import Literal
 import jax
 import jax.numpy as jnp
 
@@ -9,25 +10,29 @@ def get_edge_values(x: jax.Array):
     )
 
 class FlattenSensoryInterface(SensoryInterface):
-	"""A sensory interface that flattens the sensory input."""
+	"""A sensory interface that flattens the sensory input.
+	1. take a subset of env inputs 
+	2. flatten it
+	3. concat with internals
+	4. pad to nn size"""
 	#-------------------------------------------------------------------
-	subset: str="all"
+	subset: Literal["all", "edges", "front"]="all"
 	#-------------------------------------------------------------------
-	def encode(self, obs, policy_state, sensory_state):
-		n = policy_state.v.shape[0]
+	def encode(self, obs, neural_state, sensory_state):
+		n = neural_state.v.shape[0]
 		if self.subset=="all":
 			o = jnp.concatenate([jnp.ravel(obs.env), obs.internal], axis=0)
 		elif self.subset=="edges":
 			o = get_edge_values(obs.env)
 			o = jnp.concatenate([o, obs.internal])
 		elif self.subset=="front":
-			o = jnp.ravel(obs.env[:,:,-1])
+			o = jnp.ravel(obs.env[:,-1])
 			o = jnp.concatenate([o, obs.internal])
 		else:
 			raise ValueError(f"subset {self.subset} is not valid")
 		inp = jnp.zeros(n).at[:len(o)].set(o)
 		return inp, jnp.zeros((), jnp.float16), sensory_state, {}
 	#-------------------------------------------------------------------
-	def init(self, policy_state, key):
+	def init(self, neural_state, key):
 		return None
 

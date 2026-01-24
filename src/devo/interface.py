@@ -13,37 +13,34 @@ import math
 class AgentInterface(eqx.Module):
 	# ------------------------------------------------------------------
 	cfg: AgentConfig
-	_policy_apply: Callable[[PolicyParams,PolicyInput,PolicyState,jax.Array],PolicyState]
-	_policy_init: Callable[[PolicyParams,jax.Array], PolicyState]
-	_policy_fctry: Callable[[jax.Array], PolicyParams]
+	_neural_step: Callable[[NeuralParams,NeuralInput,NeuralState,jax.Array],NeuralState]
+	_neural_init: Callable[[NeuralParams,jax.Array], NeuralState]
+	_neural_fctry: Callable[[jax.Array], NeuralParams]
 	_sensory_interface: SensoryInterface
 	_motor_interface: MotorInterface
 	_get_body_points: Callable[[Body], jax.Array]
 	# ------------------------------------------------------------------
 	def __init__(self,
 	             cfg: AgentConfig,
-				 policy_apply: Callable[[PolicyParams,PolicyInput,PolicyState,jax.Array],PolicyState],
-				 policy_init: Callable[[PolicyParams,jax.Array],PolicyState],
-				 policy_fctry: Callable[[jax.Array], PolicyParams],
+				 neural_step: Callable[[NeuralParams,NeuralInput,NeuralState,jax.Array],NeuralState],
+				 neural_init: Callable[[NeuralParams,jax.Array],NeuralState],
+				 neural_fctry: Callable[[jax.Array], NeuralParams],
 				 sensory_interface: SensoryInterface,
 				 motor_interface: MotorInterface):
 		"""Initialize the AgentInterface.
 		
 		Args:
-			policy_apply: Function to apply policy given params, input, state, and key
-			policy_init: Function to initialize policy state from params and key
-			policy_fctry: Function to create policy params from key
-			sensory_interface: Interface for processing sensory inputs
-			motor_interface: Interface for processing motor outputs
-			body_resolution: Resolution for body point discretization (default: 4)
-			basal_energy_loss: Base energy loss per step (default: 0.0)
-			min_body_size: Minimum allowed body size (default: 1.0)
-			max_body_size: Maximum allowed body size (default: 10.0)
+		    cfg (AgentConfig): Description
+		    neural_step (Callable[[NeuralParams, NeuralInput, NeuralState, jax.Array], NeuralState]): Description
+		    neural_init (Callable[[NeuralParams, jax.Array], NeuralState]): Function to initialize neural state from params and key
+		    neural_fctry (Callable[[jax.Array], NeuralParams]): Function to create neural params from key
+		    sensory_interface (SensoryInterface): Interface for processing sensory inputs
+		    motor_interface (MotorInterface): Interface for processing motor outputs
 		"""
 		# ---
-		self._policy_apply = policy_apply
-		self._policy_init = policy_init
-		self._policy_fctry = policy_fctry
+		self._neural_step = neural_step
+		self._neural_init = neural_init
+		self._neural_fctry = neural_fctry
 		self._sensory_interface = sensory_interface
 		self._motor_interface = motor_interface
 		self.cfg = AgentConfig(basal_energy_loss=jnp.asarray(cfg.basal_energy_loss, dtype=jnp.float16),
@@ -57,16 +54,14 @@ class AgentInterface(eqx.Module):
 		                       reproduction_energy_cost=jnp.asarray(cfg.reproduction_energy_cost, dtype=jnp.float16))
 		# ---
 		body_resolution = cfg.body_resolution if cfg.body_resolution is not None else math.ceil(int(cfg.max_body_size)) + 1
-		deltas = jnp.stack(
-			[jnp.linspace(-0.5, 0.4999, body_resolution)[:,None].repeat(body_resolution, 1),
-			 -jnp.linspace(-0.5, 0.4999, body_resolution)[None,:].repeat(body_resolution, 0)]
-		).transpose(0,2,1)
+		self.cfg = self.cfg.replace(body_resolution=body_resolution)
+		deltas = self.body_discretization_deltas()
 		deltas_single_batch_dim = deltas.reshape(2,-1)
 
 		@jax.jit
 		def _get_body_points(body: Body):
-			rotation_matrix = jnp.array([[jnp.cos(body.heading), -jnp.sin(body.heading)],
-                             			 [jnp.sin(body.heading), jnp.cos(body.heading)]])
+			rotation_matrix = jnp.array([[jnp.cos(body.heading-jnp.pi/2), -jnp.sin(body.heading-jnp.pi/2)],
+                             			 [jnp.sin(body.heading-jnp.pi/2), jnp.cos(body.heading-jnp.pi/2)]])
 			rotated_deltas = jnp.matmul(rotation_matrix, deltas_single_batch_dim*body.size).reshape(2,*deltas.shape[1:])
 			return body.pos[:,None,None]+rotated_deltas
 
@@ -74,7 +69,7 @@ class AgentInterface(eqx.Module):
 	# ------------------------------------------------------------------
 	def step(self, env_obs: jax.Array, state: AgentState, key: jax.Array)->Tuple[Action,AgentState,dict]:
 		"""Make 1 update step of agent:
-			encode -> policy update -> decode
+			encode -> neural update -> decode
 		"""
 		# 1. encode observation
 		internals = jnp.stack(
@@ -84,18 +79,18 @@ class AgentInterface(eqx.Module):
 	        state.time_below_threshold/self.cfg.time_below_threshold_to_die], 
        	axis=-1)
 		obs = Observation(env=env_obs, internal=internals)
-		policy_input, sensory_energy_loss, sensory_state, sensory_info = self.encode_observation(obs, state.policy_state, state.sensory_state)
-		# 2. policy update
-		policy_state, policy_energy_loss = self.policy_apply(state.genotype.policy_params, policy_input, state.policy_state, key)
-		# 3. decode policy
-		action, motor_energy_loss, motor_state, motor_info = self.decode_policy(policy_state, state.motor_state)
-		# 4. compute energy loss (size, basal, motor, policy, sensory)
+		neural_input, sensory_energy_loss, sensory_state, sensory_info = self.encode_observation(obs, state.neural_state, state.sensory_state)
+		# 2. neural update
+		neural_state, neural_energy_loss = self.neural_step(state.genotype.neural_params, neural_input, state.neural_state, key)
+		# 3. decode neural
+		action, motor_energy_loss, motor_state, motor_info = self.decode_neural(neural_state, state.motor_state)
+		# 4. compute energy loss (size, basal, motor, neural, sensory)
 		size_energy_loss = self.cfg.size_energy_cost * state.genotype.body_size
-		energy_loss = size_energy_loss + self.cfg.basal_energy_loss + motor_energy_loss + policy_energy_loss + sensory_energy_loss
+		energy_loss = size_energy_loss + self.cfg.basal_energy_loss + motor_energy_loss + neural_energy_loss + sensory_energy_loss
 		energy = state.energy - energy_loss
 
 		state = state.replace(
-			policy_state=policy_state, 
+			neural_state=neural_state, 
 			motor_state=motor_state, 
 			sensory_state=sensory_state, 
 			energy=energy,
@@ -103,7 +98,7 @@ class AgentInterface(eqx.Module):
 		)
 
 		infos = {"motor_energy_loss": motor_energy_loss, 
-				 "policy_energy_loss": policy_energy_loss, 
+				 "neural_energy_loss": neural_energy_loss, 
 				 "sensory_energy_loss": sensory_energy_loss, 
 				 **motor_info,
 				 **sensory_info}
@@ -113,15 +108,15 @@ class AgentInterface(eqx.Module):
 	def init(self, genotype: Genotype, position: jax.Array, heading: jax.Array, 
 	         id_: UInt32, parent_id_: UInt32|None=None, generation: UInt32|None=None, 
 	         *, key: jax.Array)->AgentState:
-		"""Initialize the agent state (policy, sensory, motor, body size)"""
+		"""Initialize the agent state (neural, sensory, motor, body size)"""
 		# ---
 		ks, kp, km = jr.split(key, 3)
-		# --- 1. init policy (nn) state ---
-		policy_state = self._policy_init(genotype.policy_params, kp)
+		# --- 1. init neural (nn) state ---
+		neural_state = self.neural_init(genotype.neural_params, kp)
 		# --- 2. init sensory interface state ---
-		sensory_state = self._sensory_interface.init(policy_state, ks)
+		sensory_state = self._sensory_interface.init(neural_state, ks)
 		# --- 3. init motor int. state ---
-		motor_state = self._motor_interface.init(policy_state, km)
+		motor_state = self._motor_interface.init(neural_state, key=km)
 		# --- 4. instantiate body ----
 		body_size = jnp.clip(genotype.body_size, self.cfg.min_body_size, self.cfg.max_body_size)
 		body = Body(pos=position, heading=heading, size=body_size)
@@ -129,7 +124,7 @@ class AgentInterface(eqx.Module):
 		                   body=body,
 		                   motor_state=motor_state,
 		                   sensory_state=sensory_state,
-		                   policy_state=policy_state,
+		                   neural_state=neural_state,
 		                   alive=jnp.ones((), dtype=jnp.bool),
 		                   age=jnp.ones((), dtype=jnp.uint16),
 		                   energy=self.cfg.init_energy,
@@ -158,27 +153,34 @@ class AgentInterface(eqx.Module):
 	def is_dying(self, state: AgentState)->Bool:
 		return (state.age > self.cfg.max_age) | (state.time_below_threshold > self.cfg.time_below_threshold_to_die) 
 	# ------------------------------------------------------------------
-	def policy_apply(self, policy_params: PolicyParams, policy_input: PolicyInput, 
-		policy_state: PolicyState, key: jax.Array)->PolicyState:
-		return self._policy_apply(policy_params, policy_input, policy_state, key)
+	def neural_step(self, neural_params: NeuralParams, neural_input: NeuralInput, 
+		neural_state: NeuralState, key: jax.Array)->NeuralState:
+		return self._neural_step(neural_params, neural_input, neural_state, key)
 	# ------------------------------------------------------------------
-	def policy_init(self, policy_params: PolicyParams, key: jax.Array)->PolicyState:
-		return self._policy_init(policy_params, key)
+	def neural_init(self, neural_params: NeuralParams, key: jax.Array)->NeuralState:
+		return self._neural_init(neural_params, key)
 	# ------------------------------------------------------------------
-	def policy_fctry(self, key: jax.Array)->PolicyParams:
-		return self._policy_fctry(key)
+	def neural_fctry(self, key: jax.Array)->NeuralParams:
+		return self._neural_fctry(key)
 	# ------------------------------------------------------------------
 	def move(self, action: Action, body: Body)->Body:
 		return self._motor_interface.move(action,body)
 	# ------------------------------------------------------------------
-	def decode_policy(self, policy_state: PolicyState, motor_state: MotorState)->tuple[Action,Float16,MotorState,dict]:
-		return self._motor_interface.decode(policy_state, motor_state)
+	def decode_neural(self, neural_state: NeuralState, motor_state: MotorState)->tuple[Action,Float16,MotorState,dict]:
+		return self._motor_interface.decode(neural_state, motor_state)
 	# ------------------------------------------------------------------
-	def encode_observation(self, obs: Observation, policy_state: PolicyState, sensory_state: SensoryState)->tuple[PolicyInput,Float16,SensoryState,dict]:
-		return self._sensory_interface.encode(obs, policy_state, sensory_state)
+	def encode_observation(self, obs: Observation, neural_state: NeuralState, sensory_state: SensoryState)->tuple[NeuralInput,Float16,SensoryState,dict]:
+		return self._sensory_interface.encode(obs, neural_state, sensory_state)
 	# ------------------------------------------------------------------
 	def get_body_points(self, body: Body) -> jax.Array:
 		return self._get_body_points(body)
 	# ------------------------------------------------------------------
+	def body_discretization_deltas(self) -> jax.Array:
+		body_resolution = self.cfg.body_resolution; assert body_resolution is not None
+		return jnp.stack(
+			[jnp.linspace(-0.5, 0.4999, body_resolution)[None,:].repeat(body_resolution, 0),
+			 jnp.linspace(-0.5, 0.4999, body_resolution)[:,None].repeat(body_resolution, 1)]
+		)
+
 
 #=======================================================================

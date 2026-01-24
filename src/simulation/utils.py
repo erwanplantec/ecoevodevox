@@ -5,13 +5,12 @@ import jax.random as jr
 import equinox as eqx
 import yaml
 
-from ..agents import (sensory_interfaces, SensoryInterface, 
-                      motor_interfaces, MotorInterface, 
-                      AgentInterface, make_apply_init, 
-                      Policy, nn_models, AgentConfig)
+from ..devo import (sensory_interfaces, SensoryInterface, 
+                    motor_interfaces, MotorInterface, 
+                    AgentInterface, make_apply_init, NeuralModel,
+                    neural_models, AgentConfig)
 from ..evo import MutationModel, mutation_models, Genotype
 from ..eco.gridworld import EnvState, FoodType, ChemicalType, GridWorld, GridworldConfig
-from ..devo import encoding_models
 
 
 def load_config_file(filename)->dict:
@@ -34,25 +33,20 @@ def make_agents_interface(cfg: dict)->tuple[AgentInterface, MutationModel]:
     sensory_kwargs = {k:v for k,v in sensory_cfg.items() if k !="which"}
     sensory_interface: SensoryInterface = sensory_cls(**sensory_kwargs)
     #---
-    enc_cfg = cfg["agents"]["encoding"]
-    enc_cls = encoding_models.get(enc_cfg['which'], None); assert enc_cls is not None, f"encoding model {enc_cfg['which']} is not valid"
-    enc_kwargs = {k:v for k,v in enc_cfg.items() if k !="which"}
-    encoding_fctry = lambda key: enc_cls(**enc_kwargs, key=key)
-    #---
     nn_cfg = cfg["agents"]["nn"]
-    nn_cls = nn_models.get(nn_cfg["which"], None); assert nn_cls is not None, f"nn model {nn_cfg['which']} is not valid"
+    nn_cls = neural_models.get(nn_cfg["which"], None); assert nn_cls is not None, f"nn model {nn_cfg['which']} is not valid"
     nn_kwargs = {k:v for k,v in nn_cfg.items() if k !="which"}
-    policy_fctry = lambda key: nn_cls(encoding_model=encoding_fctry(key), **nn_kwargs)
-    prms_fctry = lambda key: eqx.filter(policy_fctry(key), eqx.is_array)
-    policy: Policy = policy_fctry(jr.key(0))
-    policy_prms, _ = eqx.partition(policy, eqx.is_array)
-    policy_apply, policy_init = make_apply_init(policy, reshape_prms=False)
+    neural_fctry = lambda key: nn_cls(**nn_kwargs, key=key)
+    prms_fctry = lambda key: eqx.filter(neural_fctry(key), eqx.is_array)
+    neural_model: NeuralModel = neural_fctry(jr.key(0))
+    neural_prms, _ = eqx.partition(neural_model, eqx.is_array)
+    neural_step, neural_init = make_apply_init(neural_model, reshape_prms=False)
     # ---
     mut_cfg = cfg["agents"]["mutation"]
     cls = mutation_models.get(mut_cfg["which"], None); assert cls is not None, f"mutation mdl {mut_cfg['which']} is not valid"
     kwargs = {k:v for k,v in mut_cfg.items() if k !="which"}
     nb_ct = len([k for k in cfg.keys() if k.startswith("ct")])
-    genotype_like = Genotype(policy_prms, jnp.asarray(0.0), jnp.zeros(nb_ct))
+    genotype_like = Genotype(neural_prms, jnp.asarray(0.0), jnp.zeros(nb_ct))
     mutation_fn: MutationModel = cls(genotype_like=genotype_like, **kwargs)
     # ---
 
@@ -69,9 +63,9 @@ def make_agents_interface(cfg: dict)->tuple[AgentInterface, MutationModel]:
                             reproduction_energy_cost=cfg["agents"]["reproduction_energy_cost"])
 
     agents_interface = AgentInterface(cfg=agent_cfg, 
-                                      policy_apply=policy_apply,
-                                      policy_init=policy_init,
-                                      policy_fctry=prms_fctry,
+                                      neural_step=neural_step,
+                                      neural_init=neural_init,
+                                      neural_fctry=prms_fctry,
                                       sensory_interface=sensory_interface,
                                       motor_interface=motor_interface)
 

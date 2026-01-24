@@ -1,13 +1,12 @@
-from ..core import Observation, PolicyState
+from ..core import Observation, NeuralState
 from .core import SensoryInterface
 
 import jax
 from jax import numpy as jnp, random as jr, nn as jnn
-import equinox as eqx
 import equinox.nn as nn
 from typing import Callable
 from flax.struct import PyTreeNode
-from jaxtyping import Bool, Float, PyTree
+from jaxtyping import Bool, Float
 
 class State(PyTreeNode):
 	"""A state for a spatially embedded sensory interface."""
@@ -37,27 +36,27 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 	border_threshold: float=0.0
 	sensor_energy_cost: float=0.0
 	#-------------------------------------------------------------------
-	def sensory_expression(self, policy_state)->jax.Array:
+	def sensory_expression(self, neural_state)->jax.Array:
 		"""Process the sensory expression from the policy state.
 		
 		Args:
-			policy_state: An object containing sensor states (s) and masks.
+			neural_state: An object containing sensor states (s) and masks.
 			
 		Returns:
 			jnp.ndarray: Processed sensory signals after thresholding and activation.
 		"""
-		s = policy_state.s * policy_state.mask[:,None]
+		s = neural_state.s * neural_state.mask[:,None]
 		s = jnp.where(s>self.sensor_expression_threshold, s, 0.0); assert isinstance(s, jax.Array)
 		return s
 	#-------------------------------------------------------------------
-	def init(self, policy_state, key):
+	def init(self, neural_state, key):
 		# ---
-		assert hasattr(policy_state, "x") #make sure network is spatially embedded
-		assert hasattr(policy_state, "v") #make sure neurons have activation
-		assert hasattr(policy_state, "s") #make sure neurons have sensory expression
+		assert hasattr(neural_state, "x") #make sure network is spatially embedded
+		assert hasattr(neural_state, "v") #make sure neurons have activation
+		assert hasattr(neural_state, "s") #make sure neurons have sensory expression
 		# ---
-		xs = policy_state.x
-		s = self.sensory_expression(policy_state)
+		xs = neural_state.x
+		s = self.sensory_expression(neural_state)
 		on_border = jnp.any(jnp.abs(xs)>self.border_threshold, axis=-1) #check if neuron is on border (epithelial layer)
 		_xs = (xs+1)/2.0001 #make sure it does not reach upper bound
 		coords = jnp.floor(_xs * self.body_resolution)
@@ -65,11 +64,11 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 
 		return State(on_border=on_border, 
 			   		 s=s, 
-			  	 	 mask=policy_state.mask, 
+			  	 	 mask=neural_state.mask, 
 					 indices=coords, 	
 					 energy_cost=jnp.astype(self.sensor_energy_cost*s.sum(), jnp.float16))
 	#-------------------------------------------------------------------
-	def encode(self, obs: Observation, policy_state: PolicyState, sensory_state: State):
+	def encode(self, obs: Observation, neural_state: NeuralState, sensory_state: State):
 		"""Encode environmental observations into sensory inputs.
 		
 		This method processes three types of inputs:
@@ -79,7 +78,7 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 		
 		Args:
 			obs: Observation object containing chemicals, walls, and internal signals.
-			policy_state: Object containing spatial positions (x), velocities (v),
+			neural-state: Object containing spatial positions (x), velocities (v),
 						 sensor states (s), and masks (m).
 			sensory_state: Current state of the sensory system.
 			
@@ -88,14 +87,16 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 				  sensory_state is the updated sensory state.
 				  
 		Raises:
-			AssertionError: If policy_state is missing required attributes (x, v, s, m).
+			AssertionError: If neural-state is missing required attributes (x, v, s, m).
 		"""
 
 		C = obs.env
 
-		i, j = sensory_state.indices.T
-		Ic = jnp.where(sensory_state.on_border, jnp.sum(C[:,i,j].T * sensory_state.s[:,:nC], axis=1), 0.0) # chemical input #type:ignore
-		Ii = jnp.sum(sensory_state.s[:, nC+nW:nC+nW+nI] * obs.internal[None], axis=1) # internal input #type:ignore
+		x, y = sensory_state.indices.T
+
+		Ic = jnp.where(sensory_state.on_border, jnp.sum(C[:,x,y].T * sensory_state.s[:,:C.shape[0]], axis=1), 0.0) # chemical input 
+
+		Ii = jnp.sum(sensory_state.s[:, C.shape[0]:] * obs.internal[None], axis=1) # internal input
 
 		I = Ic + Ii
 

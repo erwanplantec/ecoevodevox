@@ -2,7 +2,7 @@ from jaxtyping import PyTree
 from matplotlib.pyplot import stem
 from .metrics import host_log_transform, metrics_fn
 from ..eco.gridworld import GridWorld, get_cell_index
-from ..agents.interface import AgentInterface, Body, Action
+from ..devo import AgentInterface, Body, Action
 from ..evo import MutationModel, Genotype
 from .core import SimulationState
 from .core import SimulationConfig, SimulationState, AgentState
@@ -71,11 +71,11 @@ class Simulator:
             return jnp.pad(x, pad_values)
 
         key_prms, key_pos, key_head, key_size, key_init = jr.split(key, 5)
-        policy_params = jax.vmap(self.agent_interface.policy_fctry)(jr.split(key_prms,self.cfg.init_agents))
+        neural_params = jax.vmap(self.agent_interface.neural_fctry)(jr.split(key_prms,self.cfg.init_agents))
         body_sizes = jr.uniform(key_size, (self.cfg.init_agents,), minval=self.agent_interface.cfg.min_body_size, maxval=self.agent_interface.cfg.max_body_size, dtype=jnp.float16) 
         # agents emit chemicals, for convention and waiting for improvement will always be the first one (make it part of genotype as plan to make it mutable at some point)
         agents_chemical_signature = jnp.zeros((self.cfg.init_agents, self.world.nb_chemicals)).at[:, 0].set(1.0)
-        genotypes = Genotype(policy_params, body_sizes, agents_chemical_signature)
+        genotypes = Genotype(neural_params, body_sizes, agents_chemical_signature)
         positions = jr.uniform(key_pos, (self.cfg.init_agents, 2), minval=1.0, maxval=jnp.array(self.world.cfg.size, dtype=jnp.float16)-1, dtype=jnp.float16)
         headings = jr.uniform(key_head, (self.cfg.init_agents,), minval=0.0, maxval=2*jnp.pi, dtype=jnp.float16)
         ids_ = jnp.arange(1, self.cfg.init_agents+1, dtype=jnp.uint32)
