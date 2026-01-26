@@ -1,5 +1,6 @@
 from .sensory import SensoryInterface
 from .motor import MotorInterface
+from .nn import NeuralModel, make_apply_init
 from .core import *
 
 from typing import Callable, Tuple
@@ -8,39 +9,53 @@ from jaxtyping import Float16, Float, Int
 import equinox as eqx
 import math
 
+type KeyArray = jax.Array
+
 # ==================================================================
 
 class AgentInterface(eqx.Module):
 	# ------------------------------------------------------------------
 	cfg: AgentConfig
-	_neural_step: Callable[[NeuralParams,NeuralInput,NeuralState,jax.Array],NeuralState]
-	_neural_init: Callable[[NeuralParams,jax.Array], NeuralState]
-	_neural_fctry: Callable[[jax.Array], NeuralParams]
+	_neural_step: Callable[[NeuralParams,NeuralInput,NeuralState,KeyArray],tuple[NeuralState,Float]]
+	_neural_init: Callable[[NeuralParams,KeyArray], NeuralState]
+	_neural_fctry: Callable[[KeyArray], NeuralParams]
 	_sensory_interface: SensoryInterface
 	_motor_interface: MotorInterface
-	_get_body_points: Callable[[Body], jax.Array]
+	_get_body_points: Callable[[Body], KeyArray]
 	# ------------------------------------------------------------------
 	def __init__(self,
 	             cfg: AgentConfig,
-				 neural_step: Callable[[NeuralParams,NeuralInput,NeuralState,jax.Array],NeuralState],
-				 neural_init: Callable[[NeuralParams,jax.Array],NeuralState],
-				 neural_fctry: Callable[[jax.Array], NeuralParams],
 				 sensory_interface: SensoryInterface,
-				 motor_interface: MotorInterface):
-		"""Initialize the AgentInterface.
+				 motor_interface: MotorInterface,
+				 neural_model_constructor: Callable[[KeyArray], NeuralModel]|None=None,
+				 neural_step: Callable[[NeuralParams,NeuralInput,NeuralState,KeyArray],NeuralState]|None=None,
+				 neural_init: Callable[[NeuralParams,KeyArray],NeuralState]|None=None,
+				 neural_prms_fctry: Callable[[KeyArray], NeuralParams]|None=None):
+		"""Initialize the AgentInterface. 
+		The neural model can be provided either through a flax like interface by providing 
+		neural_step, neural_init and neural_fctry or through an equinox like interface by providing the model constructor 
+		as neural_model_constructor. If model provided with constructor, step, init and factory method will be created whcih additionally 
+		take model parameters as first positional argument.
 		
 		Args:
 		    cfg (AgentConfig): Description
-		    neural_step (Callable[[NeuralParams, NeuralInput, NeuralState, jax.Array], NeuralState]): Description
-		    neural_init (Callable[[NeuralParams, jax.Array], NeuralState]): Function to initialize neural state from params and key
-		    neural_fctry (Callable[[jax.Array], NeuralParams]): Function to create neural params from key
 		    sensory_interface (SensoryInterface): Interface for processing sensory inputs
 		    motor_interface (MotorInterface): Interface for processing motor outputs
+		    neural_model_constructor (Callable[[KeyArray], NeuralModel] | None, optional): Description
+		    neural_step (Callable[[NeuralParams, NeuralInput, NeuralState, KeyArray], NeuralState] | None, optional): Description
+		    neural_init (Callable[[NeuralParams, KeyArray], NeuralState] | None, optional): Function to initialize neural state from params and key
+		    neural_prms_fctry (Callable[[KeyArray], NeuralParams] | None, optional): Description
 		"""
 		# ---
-		self._neural_step = neural_step
-		self._neural_init = neural_init
-		self._neural_fctry = neural_fctry
+		if neural_model_constructor is not None:
+			dummy_model = neural_model_constructor(jr.key(0))
+			self._neural_step, self._neural_init = make_apply_init(dummy_model)
+			self._neural_fctry = lambda key: eqx.filter(neural_model_constructor(key), eqx.is_array)
+		else:
+			assert (neural_step is not None) and (neural_init is not None) and (neural_prms_fctry is not None)
+			self._neural_step = neural_step
+			self._neural_init = neural_init
+			self._neural_fctry = neural_prms_fctry
 		self._sensory_interface = sensory_interface
 		self._motor_interface = motor_interface
 		self.cfg = AgentConfig(basal_energy_loss=jnp.asarray(cfg.basal_energy_loss, dtype=jnp.float16),
