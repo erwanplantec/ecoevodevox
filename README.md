@@ -55,57 +55,19 @@ nn:
     constructor_arg: value
     ...
 ```
-| Name | Description |
-| --- | ----------- |
-| `ctrnn` | ... |
-| `rnn` | ... |
-| `ffnn` | ... |
+
+| Name | Description | code |
+| --- | ---------- | --- |
+| `ctrnn` | ... | [ctrnn.py](./src/devo/ctrnn.py) |
+| `rnn` | ... | src/devo/rnn.py |
+| `hyper_rnn` | ... |
+| `rand_ctrnn` | ... |
 
 Example:
 ```yaml
 nn:
-    which: "ctrnn"  
-```
-
-### Neural Network Encoding
-
-Encoding models define how the parameters of the neural network are encoded and are called at the intialization of the policy state. 
-
-YAML definition:
-```yaml
-encoding: 
-    which: "name_of_encoding_model"
-    constructor_arg: value
-```
-
-| Name | Description |
-| --- | ----------- |
-| `rand` | ... |
-| `direct_rnn` | ... |
-| `direct_ctrnn` | ... |
-
-Example:
-
-```yaml
-encoding:
-    which: "rand"
-    nb_neurons: 1
-    max_neurons: 128
-    regulatory_genes: 4
-    migratory_genes: 4
-    signalling_genes: 4
-    sensory_genes: 5
-    motor_genes: 1
-    synaptic_genes: 4
-    nb_synaptic_rules: 4
-    synaptic_proteins: 4
-    signalling_proteins: 4
-    max_mitosis: 10
-    mitotic_factor_threshold: 10.0
-    apoptosis_factor_threshold: 10.0
-    autonomous_decay: true
-    dev_iters: 400
-    network_type: "ctrnn"
+    which: "ctrnn" 
+    nb_neurons: 256 
 ```
 
 ### Motor Interface
