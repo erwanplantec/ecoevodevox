@@ -181,6 +181,7 @@ class AgentInterface(eqx.Module):
 			[jnp.linspace(-0.5, 0.4999, body_resolution)[None,:].repeat(body_resolution, 0),
 			 jnp.linspace(-0.5, 0.4999, body_resolution)[:,None].repeat(body_resolution, 1)]
 		)
+	# ------------------------------------------------------------------
 
 
 #=======================================================================

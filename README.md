@@ -31,10 +31,10 @@ sensory:
     constructor_arg: value
     ...
 ```
-| Name | Description |
-| --- | ----------- |
-| `spatially_embedded` | ... |
-| `flatten` | ... |
+| Name | Description | Code |
+| --- | ----------- | --- |
+| `spatially_embedded` | Sensory interface for spatially embedded neural networks. Neurons inputs depend on their position in the environment.  | [spatially_embedded.py](./src/devo/sensory/spatially_embedded.py) | 
+| `flatten` | Transforms env and internal input into flat observation vector. Can take a structured subset of observation.  | [flatten.py](./src/devo/sensory/flatten.py)
 
 Where the name of sensory model must be referenced in `src.agents.sensory.sensory_interfaces`
 Example:
@@ -58,10 +58,10 @@ nn:
 
 | Name | Description | code |
 | --- | ---------- | --- |
-| `ctrnn` | ... | [ctrnn.py](./src/devo/ctrnn.py) |
-| `rnn` | ... | src/devo/rnn.py |
-| `hyper_rnn` | ... |
-| `rand_ctrnn` | ... |
+| `ctrnn` | Continuous time reccurrent network | [ctrnn.py](./src/devo/nn/ctrnn.py) |
+| `rnn` | Regular recurrent neural network without gating | [rnn.py](./src/devo/nn/rnn.py) |
+| `hyper_rnn` | Convolutional decoder encoding  | [hypernet.py](./src/devo/nn/hypernet.py) |
+| `rand_ctrnn` | Regulation based Artificial NeuroDevlopment | [rand.py](./src/devo/nn/rand.py) |
 
 Example:
 ```yaml
@@ -80,10 +80,9 @@ motor:
 ```
 Where `"name_of_motor_model"` must be referenced in `src.agents.motor.motor_interfaces`
 
-| Name | Description |
-| --- | ----------- |
-| `braitenberg` | ... |
-| `ciliated` | ... |
+| Name | Description | Code |
+| --- | ----------- | --- |
+| `braitenberg` |  Braitenberg like motor apparatus (2 wheeled robot) | [braitenbder.py](./src/devo/motor/braitenberg.py) |
 
 </details>
 
