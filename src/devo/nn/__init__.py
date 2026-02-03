@@ -2,6 +2,7 @@ from .ctrnn import CTRNN
 from .rnn import RNN
 from .rand import RAND_CTRNN
 from .hypernetwork import HyperRNN
+from .hypernca import NeuronCTRNNNCA
 from .core import NeuralModel
 
 import equinox as eqx
@@ -11,7 +12,8 @@ neural_models = {
 	"rnn": RNN,
 	"ctrnn": CTRNN,
 	"rand_ctrnn": RAND_CTRNN,
-	"hyper_rnn": HyperRNN
+	"hyper_rnn": HyperRNN,
+	"neuronca_ctrnn": NeuronCTRNNNCA
 }
 
 def make_apply_init(model, apply_method: str="__call__", init_method: str="init", reshape_prms: bool=False):

@@ -14,6 +14,7 @@ def main(args):
 		simulator.logger.initialize(cfg)
 
 	if args.debug:
+		print("DEBUGGING")
 		state = simulator.initialize(key=jr.key(1))
 		state, trace = simulator.rollout(state, 16, key=jr.key(0))
 		simulator.finish()

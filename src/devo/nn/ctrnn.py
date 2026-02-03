@@ -150,7 +150,7 @@ class IndirectCTRNN(NeuralModel):
     dt: float
     T: float
     # ------------------------------------------------------------------
-    def __init__(self, dt: float, T: float, activation_fn: str|Callable):
+    def __init__(self, dt: float, T: float, activation_fn: str|Callable="tanh"):
         """Summary
         
         Args:
