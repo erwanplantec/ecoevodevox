@@ -136,7 +136,6 @@ class IndirectCTRNNState(CTRNNState):
 
     """Summary
     """
-    
     v: jax.Array
     W: jax.Array
     tau: jax.Array

@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "equinox>=0.13.2",
+    "equinox>=0.13.3",
     "flax>=0.12.2",
     "jax; platform_system == 'Darwin'",
     "jax[cuda]; platform_system != 'Darwin'",
