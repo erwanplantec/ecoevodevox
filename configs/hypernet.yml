@@ -1,0 +1,108 @@
+# ===== infos =====
+seed: 10
+log: false
+sampling_freq: 2
+sampling_size: 4
+ckpt_freq: 10
+project: "eedx"
+name: ""
+
+# ===== chem types =====
+
+ct-1:
+  diffusion_rate: 1.0
+  is_sparse: true
+  emission_rate: 0.1
+
+# ===== food types =====
+
+ft-1:
+  growth_rate: 0.0
+  dmin: 1
+  dmax: 1
+  chemical_signature: 0
+  energy_concentration: 1.0
+  spontaneous_grow_prob: 0.08
+  initial_density: 0.1
+
+
+# ===== env =====
+
+env:
+  size: [128,128]
+  max_agents: 512
+  init_agents: 16
+  birth_pool_size: 16
+  max_age: 1000
+  reproduction_cost: 0.5
+  max_energy: 50.0
+  initial_energy: 1.0
+  time_above_threshold_to_reproduce: 80
+  time_below_threshold_to_die: 50
+  chemicals_detection_threshold: 0.001
+  walls_density: 0.0
+  wall_effect: "none"
+
+# ===== agents =====
+
+agents:
+
+  size: 3.0
+  body_resolution: 4
+  basal_energy_loss: 1.0
+  min_body_size: 1.0
+  max_body_size: 10.0
+
+  motor:
+    which: "braitenberg"
+    max_speed: 8.0
+    wheel_speed_gain: 0.5
+    motor_energy_cost: 0.1
+    max_distance_to_motor: 0.5
+    max_neuron_force: 0.1
+    dt: 0.1
+
+  sensory:
+    which: "spatially_embedded"
+    sensor_expression_threshold: 0.9
+    border_threshold: 0.9
+    body_resolution: 4
+
+  nn:
+    which: "ctrnn"
+
+  encoding:
+    # --- mdl
+    which: "rand"
+    # --- prms
+    nb_neurons: 1
+    max_neurons: 128
+    regulatory_genes: 4
+    migratory_genes: 4
+    signalling_genes: 4
+    sensory_genes: 5
+    motor_genes: 1
+    synaptic_genes: 4
+    nb_synaptic_rules: 4
+    synaptic_proteins: 4
+    signalling_proteins: 4
+    max_mitosis: 10
+    mitotic_factor_threshold: 10.0
+    apoptosis_factor_threshold: 10.0
+    autonomous_decay: true
+    dev_iters: 400
+    network_type: "ctrnn"
+    gene_noise_scale: 0.0
+    position_noise_scale: 0.0
+
+  mutation:
+    which: "generalized"
+    sigma: 0.03
+    p_mut: 0.01
+
+
+
+
+
+
+

@@ -67,8 +67,8 @@ class NCA(eqx.Module):
     # ------------------------------------------------------------------
     def __call__(self, X: jax.Array):
         P = self.perception_model(X)
-        X = self.update_model(X, P)
-        return X
+        dX = self.update_model(X, P)
+        return dX
 
 
 class NeuronCTRNNNCA(IndirectCTRNN):
@@ -107,18 +107,19 @@ class NeuronCTRNNNCA(IndirectCTRNN):
         ], axis=0)
 
         def _step(i, X):
-            X = self.nca(X)
-            return X
+            dX = - X + self.nca(X)
+            return X + 0.1 * dX
 
         X_final = jax.lax.fori_loop(0, self.dev_steps, _step, X_init)
+        X_final = X_final.reshape(X_final.shape[0], -1)
         synapse_channels, other_channels = X_final[:self.synapse_channels], X_final[self.synapse_channels:]
         def _compute_rule(X, O):
             return X @ O @ X.T
-        W_rules = jax.vmap(_compute_rule, in_axes=(None,0))(synapse_channels.reshape(self.synapse_channels, -1).T, self.wiring_rules)
+        W_rules = jax.vmap(_compute_rule, in_axes=(None,0))(synapse_channels.T, self.wiring_rules)
         W = jnp.sum(W_rules, axis=0)
         bias = other_channels[0].reshape(-1)
-        tau = jnp.clip(jnn.sigmoid(other_channels[1]).reshape(-1), 0.03, 1.0)
-        return IndirectCTRNNState(v=jnp.zeros_like(tau), W=W, tau=tau, gain=jnp.ones_like(tau), bias=bias, mask=jnp.ones_like(tau))
+        logtau = jnp.clip(jnp.exp(other_channels[1]), 0.01)
+        return IndirectCTRNNState(v=jnp.zeros_like(logtau), W=W, logtau=logtau, gain=jnp.ones_like(logtau), bias=bias, mask=jnp.ones_like(logtau))
         
 
 

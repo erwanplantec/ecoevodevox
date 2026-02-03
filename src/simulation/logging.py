@@ -72,8 +72,11 @@ class Logger:
 
         def _log_clbk(data):
             if not wandb_log: return False
-            data = host_log_transform(data)
-            wandb.log(data)
+            transformed_data = host_log_transform(data)
+            try: 
+                wandb.log(transformed_data)
+            except: 
+                raise ValueError("looging")
             return False
         self._log_clbk = _log_clbk
 

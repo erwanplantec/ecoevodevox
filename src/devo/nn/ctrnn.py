@@ -36,7 +36,7 @@ class CTRNN(NeuralModel):
     activation_fn: Callable
     dt: float
     W: jax.Array
-    tau: jax.Array
+    logtau: jax.Array
     gain: jax.Array
     bias: jax.Array
     iters: int
@@ -62,7 +62,7 @@ class CTRNN(NeuralModel):
         self.dt = dt
         self.iters = int(T//dt)
         key_tau, key_bias, key_gain, key_W = jr.split(key, 4)
-        self.tau = jr.uniform(key_tau, (nb_neurons,), minval=0.01, maxval=1.0)
+        self.logtau = jr.uniform(key_tau, (nb_neurons,), minval=0.01, maxval=1.0)
         self.gain = jnp.ones(nb_neurons)
         self.bias = jnp.zeros(nb_neurons)
         W_init = jnn.initializers.orthogonal()
@@ -80,7 +80,7 @@ class CTRNN(NeuralModel):
             TYPE: Description
         """
         # forward network
-        forward_fn = lambda i, v: CTRNN.forward(state.v, x, self.W, self.bias, self.tau, self.gain, self.dt, self.activation_fn)
+        forward_fn = lambda i, v: CTRNN.forward(state.v, x, self.W, self.bias, jnp.clip(jnp.exp(self.logtau), 0.01, jnp.inf), self.gain, self.dt, self.activation_fn)
         v = jax.lax.fori_loop(0, self.iters, forward_fn, state.v)
         return state.replace(v=v), 0.0
     # ------------------------------------------------------------------
@@ -138,7 +138,7 @@ class IndirectCTRNNState(CTRNNState):
     """
     v: jax.Array
     W: jax.Array
-    tau: jax.Array
+    logtau: jax.Array
     gain: jax.Array
     bias: jax.Array
     mask: jax.Array|None
@@ -173,7 +173,7 @@ class IndirectCTRNN(NeuralModel):
         Returns:
             tuple[IndirectCTRNNState, Float]: Description
         """
-        forward = lambda _, v: CTRNN.forward(v, x, state.W, state.bias, state.tau, state.gain, self.dt, self.activation_fn, state.mask)
+        forward = lambda _, v: CTRNN.forward(v, x, state.W, state.bias, jnp.clip(jnp.exp(state.logtau), 0.01), state.gain, self.dt, self.activation_fn, state.mask)
         v = jax.lax.fori_loop(0, int(self.T/self.dt), forward, state.v)
         return state.replace(v=v), 0.0
     # ------------------------------------------------------------------

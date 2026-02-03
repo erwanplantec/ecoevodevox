@@ -1,6 +1,7 @@
 from .core import SimulationState
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 
@@ -20,7 +21,6 @@ def metrics_fn(sim_state: SimulationState, step_data: dict)->dict:
         "ages": agents.age,
         **food_levels,
         "total_food": env.food.sum(),
-        "network_sizes": agents.neural_state.mask.sum(-1),
         "body_sizes": agents.body.size
     }
     return data
