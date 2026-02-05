@@ -91,14 +91,17 @@ class SpatiallyEmbeddedSensoryInterface(SensoryInterface):
 		"""
 
 		C = obs.env
+		inp = jnp.concatenate([obs.env, jnp.tile(obs.internal[:,None,None], (1, *C.shape[1:]))], axis=0)
 
 		x, y = sensory_state.indices.T
 
-		Ic = jnp.where(sensory_state.on_border, jnp.sum(C[:,x,y].T * sensory_state.s[:,:C.shape[0]], axis=1), 0.0) # chemical input 
+		# Ic = jnp.where(sensory_state.on_border, jnp.sum(C[:,x,y].T * sensory_state.s[:,:C.shape[0]], axis=1), 0.0) # chemical input 
 
-		Ii = jnp.sum(sensory_state.s[:, C.shape[0]:] * obs.internal[None], axis=1) # internal input
+		# Ii = jnp.sum(sensory_state.s[:, C.shape[0]:] * obs.internal[None], axis=1) # internal input
 
-		I = Ic + Ii
+		# I = Ic + Ii
+
+		I = jnp.where(sensory_state.on_border, jnp.sum(inp[:,x,y].T * sensory_state.s, axis=1), 0.0)
 
 		return I, sensory_state.energy_cost, sensory_state, {}
 
