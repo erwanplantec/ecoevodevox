@@ -138,7 +138,7 @@ class IndirectCTRNNState(CTRNNState):
     """
     v: jax.Array
     W: jax.Array
-    logtau: jax.Array
+    tau: jax.Array
     gain: jax.Array
     bias: jax.Array
     mask: jax.Array|None
@@ -173,7 +173,7 @@ class IndirectCTRNN(NeuralModel):
         Returns:
             tuple[IndirectCTRNNState, Float]: Description
         """
-        forward = lambda _, v: CTRNN.forward(v, x, state.W, state.bias, jnp.clip(jnp.exp(state.logtau), 0.01), state.gain, self.dt, self.activation_fn, state.mask)
+        forward = lambda _, v: CTRNN.forward(v, x, state.W, state.bias, state.tau, state.gain, self.dt, self.activation_fn, state.mask)
         v = jax.lax.fori_loop(0, int(self.T/self.dt), forward, state.v)
         return state.replace(v=v), 0.0
     # ------------------------------------------------------------------
