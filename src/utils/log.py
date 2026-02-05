@@ -25,7 +25,11 @@ class Logger:
 
 		def _host_log_clbck(data):
 			data = host_log_transform(data)
-			wandb.log(data)
+			try:
+				wandb.log(data)
+			except:
+				print(jax.tree.map(lambda x: (x.shape, float(x.min()), float(x.max())), data)); exit()
+				raise ValueError
 			return jnp.zeros((),dtype=bool)
 
 		self.host_log_clbck = _host_log_clbck

@@ -1,0 +1,97 @@
+# ===== simu =====
+seed: 0
+
+simulation:
+  max_agents: 4096
+  init_agents: 512
+  birth_pool_size: 128
+  wall_effect: "none"
+
+logging:
+  wandb_log: true
+  sampling_freq: 
+  sampling_size: 16
+  ckpt_freq: 
+  wandb_project: "eedx_nhnca"
+
+
+# ===== chemical types =====
+
+ct-1: 
+  diffusion_rate: 10.0
+  is_sparse: false
+  emission_rate: 1.0
+
+ct-2: 
+  diffusion_rate: 10.0
+  is_sparse: false
+  emission_rate: 1.0
+
+# ===== food types =====
+
+ft-1:
+  growth_rate: 0.0
+  dmin: 1
+  dmax: 1
+  chemical_signature: 1
+  energy_concentration: 1.0
+  spontaneous_grow_prob: 0.002
+  initial_density: 0.1
+
+
+# ===== env =====
+
+env:
+  size: [512,512]
+  chemicals_detection_threshold: 0.001
+  walls_density: 0.0
+
+# ===== agents =====
+
+agents:
+
+  body_resolution: 
+  init_energy: 0.5
+  max_energy: 10.0
+  basal_energy_loss: 0.1
+  size_energy_cost: 0.0
+  reproduction_energy_cost: 0.5
+  time_above_threshold_to_reproduce: 150
+  time_below_threshold_to_die: 70
+  min_body_size: 1.0
+  max_body_size: 10.0
+  max_age: 1000
+
+  motor:
+    which: "braitenberg"
+    interface: "direct"
+    max_wheel_speed: 8.0
+    wheel_speed_gain: 0.5
+    motor_energy_cost: 0.1
+    dt: 0.1
+
+  sensory:
+    which: "flatten"
+    subset: "front"
+
+  nn:
+    which: "neuronca_ctrnn"
+    size: 16
+    synapse_channels: 8
+    extra_channels: 16
+    perception_channels: 104
+    dev_steps: 50
+    nb_wiring_rules: 4
+    update_layers: 2
+
+  mutation:
+    which: "generalized"
+    sigma: 0.03
+    p_mut: 1.0
+
+
+
+
+
+
+

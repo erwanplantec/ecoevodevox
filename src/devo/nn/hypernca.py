@@ -72,8 +72,8 @@ class NCA(eqx.Module):
     # ------------------------------------------------------------------
     def __call__(self, X: jax.Array):
         P = self.perception_model(X)
-        X = self.update_model(X, P)
-        return X
+        dX = self.update_model(X, P)
+        return dX
 
 class NeuronNCAState(IndirectCTRNNState):
     x: jax.Array
@@ -126,8 +126,8 @@ class NeuronNCA(IndirectCTRNN):
         ], axis=0)
 
         def _step(i, X):
-            X = self.nca(X)
-            return X
+            dX = - X + self.nca(X)
+            return X + 0.1 * dX
 
         X_final = jax.lax.fori_loop(0, self.dev_steps, _step, X_init)
         channels = jax.vmap(self.channel_partitioner)(X_final.reshape(-1, self.size**2).T)
@@ -142,7 +142,7 @@ class NeuronNCA(IndirectCTRNN):
         s = jnn.sigmoid(channels["sensory"])
 
         return NeuronNCAState(v=jnp.zeros_like(tau), W=W, tau=tau, gain=jnp.ones_like(tau), bias=bias, mask=jnp.ones_like(tau), x=xy, s=s)
-        
+
 
 
         
