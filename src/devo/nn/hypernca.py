@@ -78,6 +78,7 @@ class NCA(eqx.Module):
 class NeuronNCAState(IndirectCTRNNState):
     x: jax.Array
     s: jax.Array
+    m: jax.Array
 
 class NeuronNCA(IndirectCTRNN):
     # ------------------------------------------------------------------
@@ -140,8 +141,9 @@ class NeuronNCA(IndirectCTRNN):
         coords = jnp.linspace(-1.0, 1.0, self.size)
         xy = jnp.stack([coords[None].repeat(self.size, 0), coords[:,None].repeat(self.size, 1)], axis=2).reshape(-1, 2)
         s = jnn.sigmoid(channels["sensory"])
+        m = jnn.sigmoid(channels["motor"])
 
-        return NeuronNCAState(v=jnp.zeros_like(tau), W=W, tau=tau, gain=jnp.ones_like(tau), bias=bias, mask=jnp.ones_like(tau), x=xy, s=s)
+        return NeuronNCAState(v=jnp.zeros_like(tau), W=W, tau=tau, gain=jnp.ones_like(tau), bias=bias, mask=jnp.ones_like(tau), x=xy, s=s, m=m)
 
 
 
