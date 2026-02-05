@@ -57,7 +57,7 @@ class BraitenbergMotorInterface(MotorInterface):
 		dist_to_right_motor = jnp.linalg.norm(xs-right_motor_pos[None], axis=-1)
 		on_right_motor = dist_to_right_motor < self.max_distance_to_motor
 
-		is_motor = (neural_state.m > self.motor_expression_threshold) * neural_state.mask
+		is_motor = (neural_state.m > self.motor_expression_threshold) & neural_state.mask.astype(bool)
 
 		return BraitenbergSEMotorState(on_right_motor&is_motor, on_left_motor&is_motor)
 
