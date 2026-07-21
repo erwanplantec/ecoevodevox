@@ -9,6 +9,18 @@ from jaxtyping import Float
 import numpy as np
 
 from .core import MotorInterface, Action, Body, NeuralState, MotorState, Info
+from ...settings import POSITION_DTYPE
+
+def _scalar_motor(neural_state: NeuralState) -> jax.Array:
+	"""Motor expression as one scalar per neuron.
+
+	This interface treats motor expression as a scalar thrust per neuron, but grown
+	networks may carry it with a gene axis (RAND grows `m` as [N, motor_genes]); collapse
+	that axis so the [N] * [N] broadcasts below are well-defined rather than silently
+	forming [N, N]. Networks whose `m` is already [N] (e.g. NeuronNCA) pass through.
+	"""
+	m = neural_state.m
+	return m.mean(-1) if m.ndim == 2 else m
 
 class BraitenbergSEMotorState(struct.PyTreeNode):
 	on_right_motor: jax.Array
@@ -57,7 +69,7 @@ class BraitenbergMotorInterface(MotorInterface):
 		dist_to_right_motor = jnp.linalg.norm(xs-right_motor_pos[None], axis=-1)
 		on_right_motor = dist_to_right_motor < self.max_distance_to_motor
 
-		is_motor = (neural_state.m > self.motor_expression_threshold) & neural_state.mask.astype(bool)
+		is_motor = (_scalar_motor(neural_state) > self.motor_expression_threshold) & neural_state.mask.astype(bool)
 
 		return BraitenbergSEMotorState(on_right_motor&is_motor, on_left_motor&is_motor)
 
@@ -82,16 +94,19 @@ class BraitenbergMotorInterface(MotorInterface):
 
 	def _decode_se(self, neural_state: NeuralState, motor_state: MotorState) -> tuple[Action, Float, MotorState, Info]:
 
-		left_motor_activations = jnp.where(motor_state.on_left_motor, neural_state.v*neural_state.m, 0.0); assert isinstance(left_motor_activations, jax.Array)
+		m = _scalar_motor(neural_state)
+
+		left_motor_activations = jnp.where(motor_state.on_left_motor, neural_state.v*m, 0.0); assert isinstance(left_motor_activations, jax.Array)
 		left_motor_activation = jnp.clip(left_motor_activations, -self.max_neuron_force, self.max_neuron_force).sum()
 
-		right_motor_activations = jnp.where(motor_state.on_right_motor, neural_state.v*neural_state.m, 0.0); assert isinstance(right_motor_activations, jax.Array)
+		right_motor_activations = jnp.where(motor_state.on_right_motor, neural_state.v*m, 0.0); assert isinstance(right_motor_activations, jax.Array)
 		right_motor_activation = jnp.clip(right_motor_activations, -self.max_neuron_force, self.max_neuron_force).sum()
 
 		left_wheel_speed = jnp.clip(left_motor_activation*self.wheel_speed_gain, -self.max_wheel_speed, self.max_wheel_speed)
 		right_wheel_speed = jnp.clip(right_motor_activation*self.wheel_speed_gain, -self.max_wheel_speed, self.max_wheel_speed)
 
-		action = jnp.array([left_wheel_speed, right_wheel_speed], dtype=jnp.float16)
+		# actions feed straight into positions, so keep them at the position dtype
+		action = jnp.array([left_wheel_speed, right_wheel_speed], dtype=POSITION_DTYPE)
 		action_norm = jnp.linalg.norm(action)
 
 		energy_loss = action_norm * self.motor_energy_cost
@@ -103,7 +118,7 @@ class BraitenbergMotorInterface(MotorInterface):
 	def _decode_direct(self, neural_state: NeuralState, motor_state: MotorState) -> tuple[Action, Float, MotorState, Info]:
 
 		action = neural_state.v[-2:]
-		action = jnp.clip(action*self.wheel_speed_gain, -self.max_wheel_speed, self.max_wheel_speed).astype(jnp.float16)
+		action = jnp.clip(action*self.wheel_speed_gain, -self.max_wheel_speed, self.max_wheel_speed).astype(POSITION_DTYPE)
 		action_norm = jnp.linalg.norm(action)
 		energy_loss = action_norm * self.motor_energy_cost
 		return action, energy_loss, None, {"action_norm": action_norm}
@@ -112,9 +127,10 @@ class BraitenbergMotorInterface(MotorInterface):
 
 	def move(self, action: Action, body: Body) -> Body:
 		# ---
+		# actions are already built at POSITION_DTYPE; the cast is a safety net for callers that
+		# pass something else (no print: this runs at trace time and would fire on every compile)
 		pos_dtype = body.pos.dtype
 		if action.dtype != pos_dtype:
-			print(f"action and position have different dtypes: {action.dtype} and {pos_dtype}")
 			action = jnp.astype(action, pos_dtype)
 		# ---
 		

@@ -26,8 +26,9 @@ def main(args):
 	else:
 		keys = jr.split(jr.key(cfg["seed"]), args.repetitions)
 		for key in keys:
-			state = simulator.initialize(key=jr.key(1))
-			state, trace = simulator.rollout(state, args.steps, key=jr.key(cfg["seed"]))
+			key_init, key_rollout = jr.split(key)
+			state = simulator.initialize(key=key_init)
+			state, trace = simulator.rollout(state, args.steps, key=key_rollout)
 	
 
 if __name__ == '__main__':

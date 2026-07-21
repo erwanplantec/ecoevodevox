@@ -1,11 +1,14 @@
 wandb/
 ntbks/
 artifacts/
+notes/
 src/experimental
 anims/*
 data/*
 configs/dev_cfg.yml
 notebooks/dev.ipynb
+*.swp
+*.swo
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -178,3 +181,4 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+src/tests/*.png

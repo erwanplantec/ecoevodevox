@@ -8,6 +8,7 @@ from .core import SimulationState
 from .core import SimulationConfig, SimulationState, AgentState
 from .logging import Logger
 from .utils import make_world, make_agents_interface, load_config_file
+from ..settings import POSITION_DTYPE
 
 import jax
 from jax import numpy as jnp, random as jr
@@ -42,7 +43,9 @@ class Simulator:
         assert self.cfg.max_agents % self.nb_devices == 0
         # ---
 
-        device_mesh = jax.make_mesh((self.nb_devices,), ('N',))
+        # jax>=0.11 make_mesh defaults to Explicit axis types, but with_sharding_constraint
+        # (used in initialize/step) requires Auto axes -> request them explicitly
+        device_mesh = jax.make_mesh((self.nb_devices,), ('N',), axis_types=(jax.sharding.AxisType.Auto,))
         self.state_shardings = SimulationState(
             agents_states=NamedSharding(device_mesh, P("N")), #type:ignore
             env_state=NamedSharding(device_mesh, P()), #type:ignore
@@ -70,20 +73,39 @@ class Simulator:
             pad_values = [(0,self.cfg.max_agents-self.cfg.init_agents)] + [(0,0)]*(x.ndim-1)
             return jnp.pad(x, pad_values)
 
-        key_prms, key_pos, key_head, key_size, key_init = jr.split(key, 5)
+        key_prms, key_pos, key_head, key_size, key_init, key_age = jr.split(key, 6)
         neural_params = jax.vmap(self.agent_interface.neural_fctry)(jr.split(key_prms,self.cfg.init_agents))
         body_sizes = jr.uniform(key_size, (self.cfg.init_agents,), minval=self.agent_interface.cfg.min_body_size, maxval=self.agent_interface.cfg.max_body_size, dtype=jnp.float16) 
-        # agents emit chemicals, for convention and waiting for improvement will always be the first one (make it part of genotype as plan to make it mutable at some point)
-        agents_chemical_signature = jnp.zeros((self.cfg.init_agents, self.world.nb_chemicals)).at[:, 0].set(1.0)
+        # What agents emit, from `agents.chemical_signature` in the config; defaults to one-hot on
+        # the first chemical, which is what the setup did before the key existed. Identical for
+        # every agent and passed through mutation unchanged, so it is constant over a run (making
+        # it an evolvable trait is the planned extension).
+        sig = self.agent_interface.cfg.chemical_signature
+        if sig is None:
+            agents_chemical_signature = jnp.zeros((self.cfg.init_agents, self.world.nb_chemicals)).at[:, 0].set(1.0)
+        else:
+            sig = jnp.asarray(sig, dtype=jnp.float32)
+            assert sig.shape == (self.world.nb_chemicals,), (
+                f"agents.chemical_signature has {sig.shape[0]} entries but the world has "
+                f"{self.world.nb_chemicals} chemical(s)")
+            agents_chemical_signature = jnp.broadcast_to(sig, (self.cfg.init_agents, self.world.nb_chemicals))
         genotypes = Genotype(neural_params, body_sizes, agents_chemical_signature)
-        positions = jr.uniform(key_pos, (self.cfg.init_agents, 2), minval=1.0, maxval=jnp.array(self.world.cfg.size, dtype=jnp.float16)-1, dtype=jnp.float16)
-        headings = jr.uniform(key_head, (self.cfg.init_agents,), minval=0.0, maxval=2*jnp.pi, dtype=jnp.float16)
+        positions = jr.uniform(key_pos, (self.cfg.init_agents, 2), minval=1.0, maxval=jnp.array(self.world.cfg.size, dtype=POSITION_DTYPE)-1, dtype=POSITION_DTYPE)
+        headings = jr.uniform(key_head, (self.cfg.init_agents,), minval=0.0, maxval=2*jnp.pi, dtype=POSITION_DTYPE)
         ids_ = jnp.arange(1, self.cfg.init_agents+1, dtype=jnp.uint32)
         agents_states = jax.vmap(self.agent_interface.init)(genotypes,
                                                             positions,
                                                             headings,
                                                             ids_,
                                                             key=jr.split(key_init, self.cfg.init_agents))
+
+        # spread initial ages over [1, 0.2*max_age] instead of starting every agent at age 1:
+        # a synchronized founding cohort reproduces in one pulse and dies of old age all at
+        # once, imposing an artificial max_age-periodic boom/bust on the population. Keeping
+        # the spread well below max_age leaves the founders most of their lifespan to establish
+        max_init_age = max(int(0.2 * self.agent_interface.cfg.max_age), 1)
+        ages = jr.randint(key_age, (self.cfg.init_agents,), 1, max_init_age + 1).astype(jnp.uint16)
+        agents_states = agents_states.replace(age=ages)
 
         agents_states = jax.tree.map(_pad, agents_states)
 
@@ -117,22 +139,49 @@ class Simulator:
 
     #-------------------------------------------------------------------
 
+    def agents_chemical_sources(self, agents_states, bodies_points: jax.Array)->jax.Array:
+        """Chemical emitted by the agents themselves, splatted onto the grid -> [C, H, W].
+
+        Each agent deposits its `chemical_emission_signature` at every one of its body points, so
+        a bigger body emits proportionally more. Factored out of `step_agents` so a viewer can
+        reproduce the *exact* field the agents sense rather than an approximation of it.
+        """
+        bodies_points_cells = get_cell_index(bodies_points) # N, 2, R, R
+        res = bodies_points.shape[-1]
+        agents_emissions = jnp.tile(agents_states.genotype.chemical_emission_signature[...,None,None],
+                                    (1, 1, res, res))
+        # dead slots keep their genotype, so gate emission on `alive` or corpses would keep
+        # scenting the map from wherever they happened to die
+        agents_emissions = jnp.where(agents_states.alive[:,None,None,None], agents_emissions, 0.0)
+        return (
+            jnp.zeros((self.world.nb_chemicals, *self.world.cfg.size))
+            .at[:, *bodies_points_cells.transpose(1,0,2,3).reshape(2,-1)]
+            .add(agents_emissions.transpose(1,0,2,3).reshape(self.world.nb_chemicals,-1))
+        )
+
+    #-------------------------------------------------------------------
+
+    def chemical_fields(self, sim_state: SimulationState, *, key: jax.Array)->jax.Array:
+        """The diffused chemical fields as the agents perceive them -> [C, H, W].
+
+        Same path as `step_agents`: food signatures plus agent emissions, run through the
+        diffusion convolution, sparse channels sampled and sub-threshold values zeroed. Exposed
+        for visualisation and analysis (the step itself does not return the field).
+        """
+        bodies_points = jax.vmap(self.get_body_points)(sim_state.agents_states.body)
+        sources = self.agents_chemical_sources(sim_state.agents_states, bodies_points)
+        return self.world.compute_chemical_fields(sim_state.env_state, sources, key=key)
+
+    #-------------------------------------------------------------------
+
     def step_agents(self, sim_state: SimulationState, *, key: jax.Array)->tuple[SimulationState, dict]:
 
         key_obs, key_agents, key_death_and_repr = jr.split(key, 3)
 
         # --- 2. retrieve world infos for agents ---
         bodies_points = jax.vmap(self.get_body_points)(sim_state.agents_states.body) # N, 2, R, R
-        bodies_points_cells = get_cell_index(bodies_points) # N, 2, R, R
-        res = bodies_points.shape[-1]
-        agents_emissions = jnp.tile(sim_state.agents_states.genotype.chemical_emission_signature[...,None,None],
-                                    (1, 1, res, res))
-        agents_chemical_sources = (
-            jnp.zeros((self.world.nb_chemicals, *self.world.cfg.size))
-            .at[:, *bodies_points_cells.transpose(1,0,2,3).reshape(2,-1)]
-            .add(agents_emissions.transpose(1,0,2,3).reshape(self.world.nb_chemicals,-1))
-        )
-        
+        agents_chemical_sources = self.agents_chemical_sources(sim_state.agents_states, bodies_points)
+
         env_obs = self.world.get_agents_observations(sim_state.env_state, bodies_points, agents_chemical_sources, key=key_obs)
 
         # --- 3. update agents internal states and retrieve action ---
@@ -158,8 +207,13 @@ class Simulator:
         """move agents according to actions and apply effects of env (walls)"""
         
         agents_states, env_state = sim_state.agents_states, sim_state.env_state
-        # --- 1. check if agents are making contact with walls ---
-        new_bodies = self.world.normalize_posture(jax.vmap(self.agent_interface.move)(actions, sim_state.agents_states.body))
+        # --- 1. move agents and check wall contact ---
+        moved_bodies = jax.vmap(self.agent_interface.move)(actions, sim_state.agents_states.body)
+        new_bodies = self.world.normalize_posture(moved_bodies)
+        # measure the step from the pre-wrap position: normalize_posture wraps toroidally, so
+        # crossing a boundary would otherwise count as a ~world-width jump
+        step_distance = jnp.linalg.norm((moved_bodies.pos - agents_states.body.pos).astype(jnp.float32), axis=-1)
+        agents_distance = agents_states.distance_travelled + jnp.where(agents_states.alive, step_distance, 0.0)
         new_bodies_points = jax.vmap(self.agent_interface.get_body_points)(new_bodies)
         makes_contact = jax.vmap(self.world.check_wall_contact, in_axes=(None,0))(env_state, new_bodies_points) * sim_state.agents_states.alive
         # --- 2. apply effect of contact ---
@@ -175,7 +229,8 @@ class Simulator:
         else:
             raise ValueError(f"wall effect {self.cfg.wall_effect} is not valid")
 
-        new_agents_states = agents_states.replace(alive=agents_alive, energy=agents_energy)
+        new_agents_states = agents_states.replace(body=new_bodies, alive=agents_alive, energy=agents_energy,
+                                                  distance_travelled=agents_distance)
 
         return sim_state.replace(agents_states=new_agents_states)
 
@@ -227,12 +282,18 @@ class Simulator:
 
             free_buffer_spots = ~agents_states.alive # N,
             _, parents_buffer_id = jax.lax.top_k(reproducing+jr.uniform(key_shuff,reproducing.shape,minval=-0.1,maxval=0.1), self.cfg.birth_pool_size) # add random noise to have non deterministic sammpling
-            reproducing = jnp.zeros(self.cfg.max_agents, dtype=jnp.bool).at[parents_buffer_id].set(True)
+            # top_k always returns birth_pool_size indices, so it pads with agents that are NOT
+            # reproducing (and may be dead). Keep the original mask to filter them out: rebuilding
+            # `reproducing` from parents_buffer_id would make parents_mask all-True and let every
+            # padded slot spawn a child at its (stale) position.
             parents_mask = reproducing[parents_buffer_id]
             parents_genotypes = jax.tree.map(lambda x: x[parents_buffer_id], agents_states.genotype)
             is_free, childs_buffer_id = jax.lax.top_k(free_buffer_spots, self.cfg.birth_pool_size)
             childs_mask = parents_mask & is_free #is a child if parent was actually reproducing and there are free buffer spots
-            
+
+            # agents that actually produced a child: only these pay the reproduction cost
+            reproducing = jnp.zeros(self.cfg.max_agents, dtype=jnp.bool).at[parents_buffer_id].set(childs_mask)
+
             childs_buffer_id = jnp.where(childs_mask, childs_buffer_id, self.cfg.max_agents) # assign dummy index if not born
             parents_buffer_id = jnp.where(childs_mask, parents_buffer_id, self.cfg.max_agents) # assign dummy index if not parent
             
@@ -242,7 +303,7 @@ class Simulator:
             direction = jnp.mod(parents_bodies.heading + jnp.pi, 2*jnp.pi)
             delta = jnp.stack([jnp.cos(direction), jnp.sin(direction)], axis=-1)
             childs_positions = agents_states.body.pos[parents_buffer_id] + delta*(parents_bodies.size*2+1.0)[:,None] 
-            childs_headings = jr.uniform(key_head, minval=0.0, maxval=2*jnp.pi, dtype=jnp.float16, shape=(self.cfg.birth_pool_size,))
+            childs_headings = jr.uniform(key_head, minval=0.0, maxval=2*jnp.pi, dtype=POSITION_DTYPE, shape=(self.cfg.birth_pool_size,))
 
             childs_ids = jnp.where(childs_mask, jnp.cumsum(childs_mask, dtype=jnp.uint32)+agents_states.id_.max()+1, 0)
             childs_parents_ids = agents_states.id_[parents_buffer_id]
@@ -290,14 +351,33 @@ class Simulator:
     # ------------------------------------------------------------------
 
     def rollout(self, sim_state: SimulationState, steps: int, with_trace: bool=False, *, key: jax.Array) -> tuple[SimulationState, PyTree|None]:
+        """Run up to `steps` steps, stopping early once the population is extinct.
 
-        def _step(sim_state, key):
-            new_sim_state, data = self.step(sim_state, key=key)
-            aux = dict(sim_state=sim_state, step_data=data) if with_trace else None
-            return new_sim_state, aux
+        Without a trace this uses a `while_loop`, so a run that dies out costs nothing for its
+        remaining steps. `sim_state.time` tells you how many steps actually ran. With
+        `with_trace=True` the scan is kept (the stacked trace needs a static length), so the
+        full `steps` are always executed.
+        """
+        keys = jr.split(key, steps)
 
-        sim_state, trace = jax.lax.scan(_step, sim_state, jr.split(key, steps))
-        return sim_state, trace
+        if with_trace:
+            def _step(sim_state, key):
+                new_sim_state, data = self.step(sim_state, key=key)
+                return new_sim_state, dict(sim_state=sim_state, step_data=data)
+            return jax.lax.scan(_step, sim_state, keys)
+
+        def _cond(carry):
+            i, sim_state = carry
+            return (i < steps) & sim_state.agents_states.alive.any()
+
+        def _body(carry):
+            i, sim_state = carry
+            # index the pre-split keys so the RNG stream matches the scan version
+            new_sim_state, _ = self.step(sim_state, key=keys[i])
+            return i + 1, new_sim_state
+
+        _, sim_state = jax.lax.while_loop(_cond, _body, (0, sim_state))
+        return sim_state, None
 
     # ------------------------------------------------------------------
 
@@ -307,11 +387,16 @@ class Simulator:
 
     #-------------------------------------------------------------------
     
-    def load_ckpt(self, filename: str):
-        with open(filename, "rb") as file:
-            state_dict = pickle.load(file)
-        self.state = state_dict["env_state"]
-        self.key_sim = state_dict["key"]
+    def load_ckpt(self, filename: str) -> SimulationState:
+        """Load a checkpoint and return the SimulationState (the simulator is stateless)."""
+        from .checkpoint import load_state
+        sim_state, _meta = load_state(filename)
+        return sim_state
+
+    def save_ckpt(self, filename: str, sim_state: SimulationState, meta: dict | None=None) -> str:
+        """Write `sim_state` to `filename`."""
+        from .checkpoint import save_state
+        return save_state(filename, sim_state, meta)
 
     # ==================================================================
 

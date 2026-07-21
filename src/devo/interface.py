@@ -58,13 +58,16 @@ class AgentInterface(eqx.Module):
 			self._neural_fctry = neural_prms_fctry
 		self._sensory_interface = sensory_interface
 		self._motor_interface = motor_interface
-		self.cfg = AgentConfig(basal_energy_loss=jnp.asarray(cfg.basal_energy_loss, dtype=jnp.float16),
+		# `.replace` rather than rebuilding: this only casts the energy/size scalars to float16, so
+		# every other field must carry over untouched. Reconstructing AgentConfig here instead
+		# silently reset any field not listed back to its class default — which is how the
+		# configured time_below_threshold_to_die / time_above_threshold_to_reproduce were being
+		# dropped, and would drop each new field added to AgentConfig.
+		self.cfg = cfg.replace(basal_energy_loss=jnp.asarray(cfg.basal_energy_loss, dtype=jnp.float16),
 		                       size_energy_cost=jnp.asarray(cfg.size_energy_cost, dtype=jnp.float16),
 		                       min_body_size=jnp.asarray(cfg.min_body_size, dtype=jnp.float16),
 		                       max_body_size=jnp.asarray(cfg.max_body_size, dtype=jnp.float16),
-		                       body_resolution=cfg.body_resolution,
 		                       init_energy=jnp.asarray(cfg.init_energy, dtype=jnp.float16),
-		                       max_age=cfg.max_age,
 		                       max_energy=jnp.asarray(cfg.max_energy, dtype=jnp.float16),
 		                       reproduction_energy_cost=jnp.asarray(cfg.reproduction_energy_cost, dtype=jnp.float16))
 		# ---
@@ -100,7 +103,9 @@ class AgentInterface(eqx.Module):
 		# 3. decode neural
 		action, motor_energy_loss, motor_state, motor_info = self.decode_neural(neural_state, state.motor_state)
 		# 4. compute energy loss (size, basal, motor, neural, sensory)
-		size_energy_loss = self.cfg.size_energy_cost * state.genotype.body_size
+		# use the realized (clipped) body size, not the raw genotype value, which mutation can
+		# drive negative -> a negative size cost that generates energy for free
+		size_energy_loss = self.cfg.size_energy_cost * state.body.size
 		energy_loss = size_energy_loss + self.cfg.basal_energy_loss + motor_energy_loss + neural_energy_loss + sensory_energy_loss
 		energy = state.energy - energy_loss
 
@@ -133,7 +138,12 @@ class AgentInterface(eqx.Module):
 		# --- 3. init motor int. state ---
 		motor_state = self._motor_interface.init(neural_state, key=km)
 		# --- 4. instantiate body ----
-		body_size = jnp.clip(genotype.body_size, self.cfg.min_body_size, self.cfg.max_body_size)
+		# clip the genotype's body size into the valid range and write it back, so the stored /
+		# inherited genotype stays in range every generation. Otherwise mutation drives it below
+		# min (even negative), and a negative size makes the size energy cost negative -> free
+		# energy. Cast so body.size stays float16 (clip promotes to float32).
+		body_size = jnp.clip(genotype.body_size, self.cfg.min_body_size, self.cfg.max_body_size).astype(self.cfg.min_body_size.dtype)
+		genotype = genotype.replace(body_size=body_size)
 		body = Body(pos=position, heading=heading, size=body_size)
 		state = AgentState(genotype=genotype,
 		                   body=body,
@@ -146,6 +156,7 @@ class AgentInterface(eqx.Module):
 		                   time_above_threshold=jnp.zeros((), dtype=jnp.uint16),
 		                   time_below_threshold=jnp.zeros((), dtype=jnp.uint16),
 						   n_offsprings=jnp.zeros((), jnp.uint16),
+						   distance_travelled=jnp.zeros((), dtype=jnp.float32),
 						   generation=generation if generation is not None else jnp.ones((), dtype=jnp.uint32),
 						   id_=id_,
 						   parent_id_=parent_id_ if parent_id_ is not None else jnp.zeros((), dtype=jnp.uint32))
@@ -160,7 +171,10 @@ class AgentInterface(eqx.Module):
 		                     n_offsprings = jnp.where(has_reproduced, state.n_offsprings+1, state.n_offsprings))
 	# ------------------------------------------------------------------
 	def is_eating(self, state: AgentState)->Bool:
-		return state.alive & (state.energy < self.cfg.max_energy)
+		# satiation threshold, as a fraction of max_energy. Gating on `energy < max_energy` alone
+		# is vacuous: per-step costs drop an agent below max immediately, so it re-tops-up every
+		# step and food is grazed flat as fast as it grows.
+		return state.alive & (state.energy < self.cfg.eat_energy_fraction * self.cfg.max_energy)
 	# ------------------------------------------------------------------
 	def is_reproducing(self, state: AgentState)->Bool:
 		return (state.time_above_threshold > self.cfg.time_above_threshold_to_reproduce) & state.alive

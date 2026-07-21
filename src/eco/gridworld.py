@@ -59,22 +59,22 @@ class GridWorld:
 	#-------------------------------------------------------------------
 
 	def __init__(
-		self, 
+		self,
 		cfg: GridworldConfig,
 		chemical_types: ChemicalType,
 		food_types: FoodType):
 
 		# ---
-		nb_food_types = food_types.growth_rate.shape[0]
+		nb_food_types = food_types.growth_field.shape[0]
 		nb_chemical_types = chemical_types.diffusion_rate.shape[0]
 		assert food_types.chemical_signature.shape==(nb_food_types, nb_chemical_types)
 		# ---
-		
+
 		self.cfg = cfg
 		self.food_types: FoodType = jax.tree.map(lambda x: x.astype(jnp.float16), food_types)
-		self.growth_conv = make_growth_convolution(cfg.size, 
-												   food_types.growth_rate,
-												   food_types.dmin, 
+		self.growth_conv = make_growth_convolution(cfg.size,
+												   food_types.growth_field,
+												   food_types.dmin,
 												   food_types.dmax)
 	
 		self.chemical_types = chemical_types
@@ -103,7 +103,7 @@ class GridWorld:
 
 	@property
 	def nb_food_types(self):
-		return self.food_types.growth_rate.shape[0]
+		return self.food_types.growth_field.shape[0]
 
 	#-------------------------------------------------------------------
 

@@ -24,6 +24,16 @@ class AgentConfig(PyTreeNode):
 	time_below_threshold_to_die: int=30         # Time steps below energy threshold before death
 	time_above_threshold_to_reproduce: int=100  # Time steps above energy threshold needed to reproduce
 	reproduction_energy_cost: Float16=0.5
+	# Agents only eat below `eat_energy_fraction * max_energy`. Below 1.0 this makes satiation
+	# real: a nearly-full agent walks over food without consuming it, so food can accumulate into
+	# patches instead of being grazed flat every step. 1.0 reproduces the old `energy < max_energy`
+	# rule, which almost never fired (energy dips below max every step, so ~99% of agents passed).
+	eat_energy_fraction: float=1.0
+	# What agents emit into each chemical channel, as a `[n_chemicals]` vector. Set from the
+	# config's `agents.chemical_signature`; None keeps the historical default of one-hot on the
+	# first channel. Constant over a run: it is copied into every genotype at init and passed
+	# through mutation unchanged, so it is a property of the setup, not an evolving trait.
+	chemical_signature: tuple[float,...]|None=None
 	# ------------------------------------------------------------------
 
 class Genotype(PyTreeNode):
@@ -57,6 +67,7 @@ class AgentState(PyTreeNode):
 	time_below_threshold: Int16
 	# --- infos
 	n_offsprings: UInt16
+	distance_travelled: Float
 	generation: UInt32
 	id_: UInt32
 	parent_id_: UInt32

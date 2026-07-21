@@ -19,7 +19,8 @@ class MutationModel(eqx.Module):
 		return Genotype(neural_params, size, genotype.chemical_emission_signature) # chemical signature is left unchanged
 	#-------------------------------------------------------------------
 	def mutate_size(self, size: Float, key: jax.Array)->Float:
-		return size + jr.normal(key)*self.sigma_size
+		# jr.normal is float32; keep the mutation in the genotype's dtype (body size is float16)
+		return (size + jr.normal(key)*self.sigma_size).astype(size.dtype)
 	#-------------------------------------------------------------------
 	def mutate_neural_params(self, params: NeuralParams, key: jax.Array)->NeuralParams:
 		raise NotImplementedError

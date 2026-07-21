@@ -18,6 +18,26 @@ def heaviside(x: jax.Array)->jax.Array:
 def M(x):
     return jnp.stack([x[...,0], x[...,1], jnp.abs(x[...,0]), jnp.abs(x[...,1]), jnp.maximum(jnp.abs(x[...,0]), jnp.abs(x[...,1]))], axis=-1)
 
+class WiringModel(eqx.Module):
+    def __call__(self, pre, post):
+        raise NotImplementedError
+    
+class BarabasiWiringModel(WiringModel):
+    rules: jax.Array
+    def __init__(self, nb_proteins: int, nb_rules: int=1,  *, key: jax.Array):
+        self.rules = jr.normal(key, (nb_rules,nb_proteins,nb_proteins))
+    def __call__(self, pre, post):
+        apply_rule = lambda pr, po, r: pr @ r @ po.T
+        return jax.vmap(apply_rule, in_axes=(None,None,0))(pre, post, self.rules).sum(0) / jnp.sqrt(len(pre))
+    
+class MLPWiringModel(WiringModel):
+    mlp: nn.MLP
+    def __init__(self, nb_proteins: int, width: int=16, depth: int=1, *,  key: jax.Array):
+        self.mlp = nn.MLP(nb_proteins, 2, width, depth, key=key)
+    def __call__(self, pre, post):
+        w, gate =  self.mlp(pre-post)
+        return w * jnn.sigmoid(gate)
+
 class RANDDevelopmentalState(PyTreeNode):
     s: jax.Array # gene expression
     x: jax.Array # position
@@ -39,8 +59,9 @@ class RAND_CTRNN(IndirectCTRNN):
     W_syn: jax.Array
     W_neur: nn.Linear
     bias: jax.Array
-    tau: jax.Array
-    O_syn: jax.Array
+    logtau: jax.Array
+    wiring_model: WiringModel
+    signals_logdecay: jax.Array
     # ---
     init_neurons: int
     max_neurons: int
@@ -58,12 +79,13 @@ class RAND_CTRNN(IndirectCTRNN):
     sensory_activation_fn: Callable
     gene_noise_scale: float
     position_noise_scale: float
+    fixed_morphogen_field: Callable
     # ---
     def __init__(self, init_neurons=1, max_neurons=128, regulatory_genes=8, migratory_genes=4, signalling_genes=2, sensory_genes=1, motor_genes=1,
                  synaptic_genes=4, synaptic_proteins=4, signalling_proteins=4, max_mitosis=10, mitotic_factor_threshold=10.0, apoptosis_factor_threshold=10.0, 
-                 nb_synaptic_rules=1, grn_model="continuous", autonomous_decay=True, dev_iters=400, gene_noise_scale=0.0, position_noise_scale=0.0,
+                 wiring_model: str="barabasi", wiring_model_kwargs: dict={}, grn_model="continuous", autonomous_decay=True, dev_iters=400, gene_noise_scale=0.0, position_noise_scale=0.0,
                  neuron_params_genes=1, expression_bounds=(0.0, 1.0), motor_activation_fn=lambda x:x, sensory_activation_fn=lambda x:x, 
-                 ctrnn_activation: str|Callable="tanh", ctrnn_dt: float=0.1, ctrnn_T: float=1.0, *, key: jax.Array):
+                 ctrnn_activation: str|Callable="tanh", ctrnn_dt: float=0.1, ctrnn_T: float=1.0, fixed_morphogen_field: Callable=M, *, key: jax.Array):
         """Initialize the RAND (Regulation based Neural Development) model.
         
         Args:
@@ -93,6 +115,7 @@ class RAND_CTRNN(IndirectCTRNN):
             ctrnn_activation (str | Callable, optional): Description
             ctrnn_dt (float, optional): Description
             ctrnn_T (float, optional): Description
+            fixed_morphogen_field (Callable): function defining the fixed morphogen field available to neurons during development
             key (jax.Array): JAX random key for initialization.
         
         Deleted Parameters:
@@ -118,18 +141,26 @@ class RAND_CTRNN(IndirectCTRNN):
         total_genes = len(genome)
         self.total_genes = total_genes
         
-        kin, kex, kmigr, kpert, kbias, ksyn, kosyns, ktau, kneur = jr.split(key, 9)
+        kin, kex, kmigr, kpert, kbias, ksyn, kwiring, ktau, kneur, ksig_decay = jr.split(key, 10)
         
         self.W_in = jr.uniform(kin, (total_genes, total_genes), minval=-1.0, maxval=1.0)
         self.W_ex = jr.uniform(kex, (5+signalling_proteins, total_genes), minval=-1.0, maxval=1.0)
         self.bias = jr.uniform(kbias, (total_genes,), minval=-1.0, maxval=1.0)
-        self.tau = jr.uniform(ktau, (total_genes,), minval=0.1, maxval=1.0)
+        self.logtau = jr.normal(ktau, (total_genes,)) * 0.1
         
-        self.W_migr = jr.normal(kmigr, (migratory_genes,signalling_proteins+5))
+        fixed_morphogens = len(fixed_morphogen_field(jnp.zeros(2,)))
+        self.fixed_morphogen_field = fixed_morphogen_field
+        self.W_migr = jr.normal(kmigr, (migratory_genes,signalling_proteins+fixed_morphogens))
         self.W_sign = jr.normal(kpert, (signalling_genes,signalling_proteins))
+        self.signals_logdecay = jr.normal(ksig_decay, (signalling_proteins,))
         
         self.W_syn = jr.normal(ksyn, (synaptic_genes,synaptic_proteins))
-        self.O_syn = jr.normal(kosyns, (nb_synaptic_rules,synaptic_proteins,synaptic_proteins))
+        if wiring_model=="barabasi":
+            self.wiring_model = BarabasiWiringModel(synaptic_proteins, **wiring_model_kwargs, key=kwiring)
+        elif wiring_model=="mlp":
+            self.wiring_model = MLPWiringModel(synaptic_proteins, **wiring_model_kwargs, key=kwiring)
+        else: 
+            raise ValueError("no such wiring model")
 
         self.W_neur = nn.Linear(neuron_params_genes, 3, key=kneur)
 
@@ -203,9 +234,10 @@ class RAND_CTRNN(IndirectCTRNN):
         mask = jnp.where(dead, False, state.mask)
         state = state.replace(mask=mask)
 
-        def _mitosis(state: RANDDevelopmentalState, mitotic, key):
+        def _mitosis(state: RANDDevelopmentalState, mitotic, mitotic_factors, key):
             k1, k2 = jr.split(key)
-            _, mitotic_ids = jax.lax.top_k(mitotic+jr.normal(k1, (self.max_neurons,))*0.01, self.max_mitosis)
+
+            _, mitotic_ids = jax.lax.top_k(mitotic_factors+jr.uniform(k1, (self.max_neurons,), minval=-0.1, maxval=0.1), self.max_mitosis)
             is_mitotic = mitotic[mitotic_ids]
             is_free, buffer_ids = jax.lax.top_k(~state.mask, self.max_mitosis)
             mitosis_mask = is_mitotic & is_free
@@ -226,15 +258,16 @@ class RAND_CTRNN(IndirectCTRNN):
         state, nb_mitotic = jax.lax.cond(has_free_space & jnp.any(mitotic), 
                              _mitosis, 
                              lambda s, *_: (s, 0), 
-                             state, mitotic, key_mitosis)
+                             state, mitotic, mitotic_factors*state.mask,  key_mitosis)
         
         genes = jax.vmap(self.genes_shaper)(state.s) #N, m
         signals = genes["signalling"]@self.W_sign
+        signals_decay = jnp.exp(self.signals_logdecay) * 0.005
         def M_(x):
             dists = jnp.square(x[None]-state.x).sum(-1) # N,
-            concentrations = jnp.exp(-dists/0.005) # N, 
-            perts = jnp.sum(concentrations[:,None] * signals * state.mask[:,None], axis=0)
-            return jnp.concatenate([M(x),perts])
+            concentrations = jnp.exp(-dists[:,None]/(signals_decay[None])) # N,1 
+            perts = jnp.sum(concentrations * signals * state.mask[:,None], axis=0)
+            return jnp.concatenate([self.fixed_morphogen_field(x),perts])
         # --- GRN step
         I = jax.vmap(M_)(state.x)
         inp_ex = I@self.W_ex
@@ -243,8 +276,8 @@ class RAND_CTRNN(IndirectCTRNN):
         if self.grn_model == "continuous":
             ds = jnn.tanh(inp_in + inp_ex + self.bias) + (jr.normal(key_gene, state.s.shape)*self.gene_noise_scale)
             if self.autonomous_decay:
-                dS = ds - state.s
-            ds = ds / self.tau[None]
+                ds = ds - state.s
+            ds = ds / jnp.exp(self.logtau[None])
             s = jnp.clip(state.s + 0.03 * ds, self.expression_bounds[0], self.expression_bounds[1])
             s = jnp.where(state.mask[:,None], s, 0.)
         else:
@@ -294,8 +327,9 @@ class RAND_CTRNN(IndirectCTRNN):
         genes = jax.vmap(self.genes_shaper)(state.s)
         s_syn, s_sensory, s_motor, s_neurons = genes["synaptic"], genes["sensory"], genes["motor"], genes["neuron_params"]
         synaptic_proteins = s_syn@self.W_syn
-        get_weigth = lambda O: synaptic_proteins@O@synaptic_proteins.T
-        W = jax.vmap(get_weigth)(self.O_syn).sum(0)
+        W = jax.vmap(jax.vmap(self.wiring_model, in_axes=(0,None)), in_axes=(None,0))(
+            synaptic_proteins, synaptic_proteins
+        )
         W = jnp.where(state.mask[None]*state.mask[:,None], W, 0.); assert isinstance(W, jax.Array)
         W = jnp.where(jnp.abs(W)>1e-3, W, 0.0)
         sensory = self.sensory_activation_fn(s_sensory)
@@ -304,9 +338,9 @@ class RAND_CTRNN(IndirectCTRNN):
         mask = state.mask
         x = state.x
 
-        tau, gain, bias = jax.vmap(self.W_neur)(s_neurons).T
-        tau = jnp.clip(tau, 0.01)
-        gain = jnp.clip(gain, 0.01)
+        logtau, loggain, bias = jax.vmap(self.W_neur)(s_neurons).T
+        tau = jnp.clip(jnp.exp(logtau), 0.01)
+        gain = jnp.clip(jnp.exp(loggain), 0.01)
 
         return RANDCTRNNState(v=v, W=W, mask=mask, x=x, s=sensory, m=motor, tau=tau, gain=gain, bias=bias)
         

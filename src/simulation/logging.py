@@ -76,7 +76,7 @@ class Logger:
             try: 
                 wandb.log(transformed_data)
             except: 
-                raise ValueError("looging")
+                raise ValueError("logging")
             return False
         self._log_clbk = _log_clbk
 
