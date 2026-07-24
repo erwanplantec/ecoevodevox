@@ -73,6 +73,15 @@ def make_agents_interface(cfg: dict)->tuple[AgentInterface, MutationModel]:
     nn_cfg = cfg["agents"]["nn"]
     nn_cls = neural_models.get(nn_cfg["which"], None); assert nn_cls is not None, f"nn model {nn_cfg['which']} is not valid"
     nn_kwargs = {k:v for k,v in nn_cfg.items() if k !="which"}
+    # optional: feed the ciliated_torque body geometry to RAND development as extra morphogens
+    # (the outward normal at each border cell). Needs a ciliated_torque motor + a rand_ctrnn nn;
+    # RAND reads the morphogen count from the field at init, so nothing else in the config changes.
+    if nn_kwargs.pop("body_morphogens", False):
+        from ..devo.motor.ciliated_torque import make_ciliated_torque_morphogen_field
+        if nn_cfg["which"] != "rand_ctrnn":
+            raise ValueError("agents.nn.body_morphogens requires nn.which == 'rand_ctrnn' "
+                             f"(got {nn_cfg['which']!r})")
+        nn_kwargs["fixed_morphogen_field"] = make_ciliated_torque_morphogen_field(motor_interface)
     neural_fctry = lambda key: nn_cls(**nn_kwargs, key=key)
     neural_prms_fctry = lambda key: eqx.filter(neural_fctry(key), eqx.is_array)
     # ---
@@ -108,7 +117,9 @@ def make_agents_interface(cfg: dict)->tuple[AgentInterface, MutationModel]:
                             body_resolution=cfg["agents"].get("body_resolution", None),
                             time_below_threshold_to_die=cfg["agents"]["time_below_threshold_to_die"],
                             time_above_threshold_to_reproduce=cfg["agents"]["time_above_threshold_to_reproduce"],
-                            reproduction_energy_cost=cfg["agents"]["reproduction_energy_cost"])
+                            reproduction_energy_cost=cfg["agents"]["reproduction_energy_cost"],
+                            size_energy_exponent=cfg["agents"].get("size_energy_exponent", 1.5),
+                            reproduction_energy_exponent=cfg["agents"].get("reproduction_energy_exponent", 2.0))
 
     agents_interface = AgentInterface(cfg=agent_cfg, 
                                       neural_model_constructor=neural_fctry,

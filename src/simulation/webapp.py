@@ -23,7 +23,7 @@ import matplotlib
 matplotlib.use("Agg")          # render.py pulls in pyplot for colormaps; keep it headless
 import panel as pn
 from bokeh.events import Tap
-from bokeh.models import ColumnDataSource, Div
+from bokeh.models import ColumnDataSource, Div, HoverTool
 from bokeh.palettes import Category10_10
 from bokeh.plotting import figure
 
@@ -34,8 +34,40 @@ from .checkpoint import save_state, load_state
 from ..devo.core import Genotype
 from ..settings import POSITION_DTYPE
 
-_METRICS = ["population", "total_food", "energy (avg)", "speed (avg)", "nb_neurons (avg)",
-            "age (avg)"]
+_METRICS = ["population", "total_food", "energy (avg)", "speed (avg)", "angular speed (avg)",
+            "nb_neurons (avg)", "body size (avg)", "age (avg)", "diversity",
+            "patchiness (len)", "patchiness (vmr)"]
+
+# metrics that cost a device sync or a host FFT — computed only while their chart is selected, so
+# the metric selector doubles as a performance control on long runs
+_EXPENSIVE_METRICS = {"diversity", "patchiness (len)", "patchiness (vmr)"}
+
+# minimum wall-clock spacing between the heavy patchiness FFT recomputations. It changes slowly, so
+# a stale value between updates is fine, and this caps its cost contribution on large grids.
+_HEAVY_METRIC_INTERVAL = 2.0
+
+# named palette for run curves — used both to auto-assign a colour to each new run and as the
+# options for the recolour dropdown. Names (not hex) go in the run label so it stays readable.
+_RUN_COLOURS = [("blue", "#1f77b4"), ("orange", "#ff7f0e"), ("green", "#2ca02c"),
+                ("red", "#d62728"), ("purple", "#9467bd"), ("brown", "#8c564b"),
+                ("pink", "#e377c2"), ("gray", "#7f7f7f"), ("olive", "#bcbd22"),
+                ("cyan", "#17becf"), ("black", "#000000")]
+_RUN_COLOUR_MAP = dict(_RUN_COLOURS)
+
+# cap on agents sampled for the (on-demand) genotype PCA scatter — a full population is both slow
+# to SVD and unreadable as points
+_PCA_SAMPLE = 800
+
+# max points kept per chart line. Without a cap the charts stream a point every record forever, so
+# a long run accumulates 100k+ points per line; bokeh re-renders all of them each frame and the
+# websocket backs up, which — because the sim runs inside the same periodic callback — drags the
+# simulation rate down too. Above this the current run's line is halved in place (every other point
+# dropped) and points are recorded half as often, so the whole run stays visible at bounded cost.
+_DISPLAY_POINTS = 4000
+
+# cap on the in-memory metric history (only its latest value is read, for the status line /
+# extinction check); keeps a very long run from growing the Python lists without bound.
+_HISTORY_MAX = 20000
 
 
 def paint_food(env_state, food_type, centre, radius: float, density: float=1.0,
@@ -90,10 +122,10 @@ _STEPS_PER_TICK = 5
 # rather than simulating, and the UI stops responding to clicks.
 _MIN_PERIOD_MS = 10
 
-# wall-clock ceiling on the gap between UI refreshes. `record_every` counts *steps*, so on its own
-# it stretches the refresh interval in proportion to how much the run is throttled — at 1 step/s
-# and record_every=10 the whole UI would freeze for 10 s at a time and every click would look
-# ignored. Refreshing at least this often keeps the app at ~10 fps whatever the simulation speed.
+# wall-clock spacing between *display* refreshes (world render + readouts), ~10 fps. This is now
+# fully decoupled from chart recording: `record_every` (in steps) controls how often data points
+# are recorded (data volume / memory), while this keeps the display smooth at any simulation speed
+# without forcing extra chart points.
 _MAX_REFRESH_GAP_MS = 100
 
 
@@ -110,8 +142,9 @@ class SimApp:
 		self.key = None
 		self._jit_step = None
 		self.steps_done = 0     # plain python counter: never forces a device sync
-		self._last_record = 0
-		self._last_record_time = time.monotonic()
+		self._last_record = 0            # step of the last chart-data record (gated by record_every)
+		self._last_display_time = time.monotonic()   # wall time of the last display refresh
+		self._last_display_step = 0                  # step of the last display refresh
 		self.running = False
 		self._cb = None         # panel periodic callback driving the run loop
 		self._busy = False      # guards against re-entrant / queued rebuilds
@@ -125,11 +158,18 @@ class SimApp:
 		self._jit_chem = None       # jitted chemical-field fn, built with the simulator
 		self._jit_snapshot = None   # jitted per-agent gather for the inspector
 		self._jit_find = None       # jitted id -> buffer-slot lookup
+		self._jit_diversity = None  # jitted standing genetic-diversity reduction
 		# type names, replaced from the config on build; defaults keep the widgets usable before
 		self._food_names: list[str] = ["food 0"]
 		self._chem_names: list[str] = []
 		self._obs_channels: list[str] = ["ct-1"]   # chemicals then walls, as the observation is
 		self.history: dict[str, list] = {"step": [], **{m: [] for m in _METRICS}}
+		self._disp_stride = 1   # chart decimation: record every Nth point (grows on long runs)
+		self._disp_count = 0
+		self._speed_ema = 0.0   # smoothed steps/s shown on the world view
+		self._session_hooked = False   # session-destroyed handler registered once per run session
+		self._last_patchiness = (np.nan, np.nan)   # cached heavy-metric value between recomputes
+		self._last_patchiness_time = 0.0
 		self._build_widgets()
 		self.load_config()
 	#-------------------------------------------------------------------
@@ -155,6 +195,7 @@ class SimApp:
 		self._jit_chem = None
 		self._jit_snapshot = None
 		self._jit_find = None
+		self._jit_diversity = None
 		jax.clear_caches()
 		simulator, _ = self._simulator_from_cfg(cfg)
 		self.simulator = simulator
@@ -162,6 +203,22 @@ class SimApp:
 		# one jitted single step, compiled once and reused for every press of Step
 		self._jit_step = jax.jit(lambda state, key: simulator.step(state, key=key))
 		self._jit_chem = jax.jit(lambda state, key: simulator.chemical_fields(state, key=key))
+		# standing genetic diversity: the RMS spread of living genotypes around their mean, i.e.
+		# sqrt of the total per-parameter variance over the (neural_params, body_size) genotype.
+		# Equals the RMS pairwise genetic distance up to a constant, but is O(N*D) not O(N^2), and
+		# runs on-device as one reduction so it is cheap enough to track every record.
+		def _diversity(state):
+			a = state.agents_states
+			alive = a.alive.astype(jnp.float32)
+			cnt = jnp.maximum(alive.sum(), 1.0)
+			total = jnp.asarray(0.0)
+			for x in jax.tree.leaves((a.genotype.neural_params, a.genotype.body_size)):
+				x = x.astype(jnp.float32)
+				m = alive.reshape((-1,) + (1,) * (x.ndim - 1))
+				mean = jnp.sum(x * m, axis=0) / cnt
+				total = total + jnp.sum(((x - mean) ** 2) * m, axis=0).sum() / cnt
+			return jnp.where(alive.sum() > 1, jnp.sqrt(total), 0.0)
+		self._jit_diversity = jax.jit(_diversity)
 		# Inspector reads, jitted. Indexing the agent buffers eagerly costs one XLA dispatch per
 		# field on arrays that are large and device-sharded (W is [max_agents, N, N]), which came
 		# to ~35 ms per refresh; fused into one kernel it is a fraction of that. `idx` stays traced
@@ -231,7 +288,8 @@ class SimApp:
 		self.state = self.simulator.initialize(key=k)
 		self.steps_done = 0
 		self._last_record = 0
-		self._last_record_time = time.monotonic()
+		self._last_display_time = time.monotonic()
+		self._last_display_step = 0
 		# ids restart from 1, so a stale selection would latch onto an unrelated new agent
 		self._selected_idx = None
 		self._selected_id = None
@@ -243,13 +301,16 @@ class SimApp:
 	def _new_run(self):
 		"""Start a new curve on every chart: its own source, its own colour."""
 		self._run_counter += 1
-		colour = Category10_10[(self._run_counter - 1) % len(Category10_10)]
-		name = f"run {self._run_counter} · seed {int(self.seed_input.value)} · {colour}"
+		cname, colour = _RUN_COLOURS[(self._run_counter - 1) % len(_RUN_COLOURS)]
+		name = f"run {self._run_counter} · seed {int(self.seed_input.value)} · {cname}"
 		cds = ColumnDataSource(data={"step": [], **{m: [] for m in _METRICS}})
 		renderers = [f.line("step", m, source=cds, line_width=1.5, color=colour)
 		             for f, m in zip(self._chart_figs, _METRICS)]
 		self._runs.append({"name": name, "cds": cds, "renderers": renderers})
 		self._cds = cds
+		# fresh line: record every point until it hits the cap, then decimate (see _record)
+		self._disp_stride = 1
+		self._disp_count = 0
 		self._refresh_run_selector()
 
 	def _delete_runs(self, names):
@@ -423,8 +484,12 @@ class SimApp:
 		colours = np.where(sens & mot, "#9467bd",
 		                   np.where(sens, "#2ca02c", np.where(mot, "#ff7f0e", "#bbbbbb")))
 		sizes = 9 + 9 * np.clip(np.abs(m1[live]), 0, 1)
+		act = np.asarray(d["v"], np.float32)[live] if "v" in d else np.zeros(live.size)
+		# per-neuron columns for the hover tooltip (position, sensory/motor expression, activation)
 		self._net_nodes.data = {"x": x[live, 0].tolist(), "y": x[live, 1].tolist(),
-		                        "color": colours.tolist(), "size": sizes.tolist()}
+		                        "color": colours.tolist(), "size": sizes.tolist(),
+		                        "idx": live.tolist(), "sensory": s1[live].tolist(),
+		                        "motor": m1[live].tolist(), "act": act.tolist()}
 
 		age = max(float(d["age"]), 1.0)
 		dist = float(d["distance"])
@@ -548,6 +613,63 @@ class SimApp:
 		except Exception as e:
 			self.mini_info.text = f"<b>{type(e).__name__}</b>: <code>{e}</code>"
 
+	# --- genotype PCA -------------------------------------------------
+	def _on_compute_pca(self, event=None):
+		"""Project the living population's genotypes to 2D (PCA) and scatter them.
+
+		A snapshot, run on click rather than every refresh: it pulls the full genotype vectors to
+		the host and SVDs them, which is far too heavy for the live loop. Points are coloured by
+		the chosen trait, so genetic clusters can be read against size / lineage / network size.
+		"""
+		try:
+			from sklearn.decomposition import PCA
+			import matplotlib.pyplot as plt
+			if self.state is None:
+				self.pca_info.text = "<i>build the simulator first</i>"
+				return
+			agents = self.state.agents_states
+			alive = np.asarray(agents.alive)
+			idx = np.flatnonzero(alive)
+			if idx.size < 3:
+				self.pca_info.text = f"<i>need &ge;3 living agents (have {idx.size})</i>"
+				return
+			# subsample for a readable, quick scatter
+			if idx.size > _PCA_SAMPLE:
+				idx = np.random.default_rng(0).choice(idx, _PCA_SAMPLE, replace=False)
+
+			# flatten each agent's genotype (neural params + body size) to one vector -> [n, D]
+			leaves = jax.tree.leaves((agents.genotype.neural_params, agents.genotype.body_size))
+			cols = [np.asarray(x[idx]).reshape(len(idx), -1).astype(np.float32) for x in leaves]
+			X = np.concatenate(cols, axis=1)
+			# drop constant dimensions so PCA is not dominated by numerical noise on them
+			keep = X.std(0) > 1e-9
+			X = X[:, keep] if keep.any() else X
+			pca = PCA(n_components=2)
+			proj = pca.fit_transform(X)
+
+			trait = self.pca_color_by.value
+			vals = {"body_size": np.asarray(agents.body.size, np.float32)[idx],
+			        "generation": np.asarray(agents.generation, np.float32)[idx],
+			        "energy": np.asarray(agents.energy, np.float32)[idx],
+			        "nb_neurons": (np.asarray(agents.neural_state.mask).sum(-1)[idx].astype(np.float32)
+			                       if getattr(agents.neural_state, "mask", None) is not None
+			                       else np.zeros(len(idx)))}[trait]
+			lo, hi = float(vals.min()), float(vals.max()); rng = (hi - lo) or 1.0
+			cmap = plt.get_cmap("viridis")
+			colours = ["#%02x%02x%02x" % tuple(int(255 * c) for c in cmap((v - lo) / rng)[:3])
+			           for v in vals]
+			self._pca_source.data = {"x": proj[:, 0].tolist(), "y": proj[:, 1].tolist(),
+			                         "color": colours}
+			ev = pca.explained_variance_ratio_
+			self.pca_fig.title.text = (f"genotype PCA · n={len(idx)} · D={X.shape[1]} · "
+			                           f"var {100*ev[0]:.0f}%/{100*ev[1]:.0f}%")
+			self.pca_info.text = (f"<div style='font-size:10px;color:#666'>colour = {trait} "
+			                      f"[{lo:.2f}, {hi:.2f}] (dark→bright). {int(alive.sum())} alive"
+			                      f"{f', showing {len(idx)}' if alive.sum() > len(idx) else ''}. "
+			                      f"PC1+PC2 explain {100*(ev[0]+ev[1]):.0f}% of genetic variance.</div>")
+		except Exception as e:
+			self.pca_info.text = f"<b>{type(e).__name__}</b>: <code>{e}</code>"
+
 	# --- checkpoints --------------------------------------------------
 	def _on_save_ckpt(self, event=None):
 		try:
@@ -572,7 +694,8 @@ class SimApp:
 			self.state = state
 			self.steps_done = int(meta.get("step", int(state.time)))
 			self._last_record = self.steps_done
-			self._last_record_time = time.monotonic()
+			self._last_display_time = time.monotonic()
+			self._last_display_step = self.steps_done
 			self.history = {"step": [], **{m: [] for m in _METRICS}}
 			self._new_run()          # loaded state starts its own curve
 			self._record()
@@ -585,6 +708,27 @@ class SimApp:
 		names = [r["name"] for r in self._runs]
 		self.run_selector.options = names
 		self.run_selector.value = [n for n in self.run_selector.value if n in names]
+
+	def _recolour_selected(self, event=None):
+		"""Recolour the run(s) selected in the list to the colour chosen in the dropdown."""
+		selected = set(self.run_selector.value)
+		if not selected:
+			self._status("select run(s) in the list first, then pick a colour", error=True)
+			return
+		cname = self.run_color.value
+		colour = _RUN_COLOUR_MAP[cname]
+		remap = {}                                   # old name -> new name (colour label changes)
+		for r in self._runs:
+			if r["name"] in selected:
+				for rend in r["renderers"]:
+					rend.glyph.line_color = colour   # live update of each chart's line
+				new_name = r["name"].rsplit(" · ", 1)[0] + f" · {cname}"
+				remap[r["name"]] = new_name
+				r["name"] = new_name
+		# rename in place: refresh options, then carry the selection over to the new names
+		self.run_selector.options = [r["name"] for r in self._runs]
+		self.run_selector.value = [remap.get(n, n) for n in selected]
+		self._status(f"recoloured {len(remap)} run(s) → <b>{cname}</b>")
 
 	def step(self, n: int, record_every: int | None=None):
 		"""Advance n steps, recording metrics every `record_every` steps.
@@ -606,24 +750,49 @@ class SimApp:
 				if self.history["population"][-1] == 0:   # extinct: nothing left to simulate
 					break
 
+	def _apply_metric_visibility(self):
+		"""Show only the selected charts. Order of `_METRICS` == order of the panes."""
+		sel = set(self.metric_select.value)
+		for m, pane in zip(_METRICS, self._chart_panes):
+			pane.visible = m in sel
+
 	def _metrics(self) -> dict:
 		s = self.state
 		agents = s.agents_states
 		alive = np.asarray(agents.alive)
 		n = int(alive.sum())
+		# only compute what a visible chart needs; the expensive metrics (device sync / FFT) are
+		# skipped entirely unless selected, so the selector also controls per-record cost
+		sel = set(self.metric_select.value) if getattr(self, "metric_select", None) is not None else set(_METRICS)
 		out = {"population": n, "total_food": float(np.asarray(s.env_state.food).sum())}
 		if n:
 			out["energy (avg)"] = float(np.asarray(agents.energy, np.float32)[alive].mean())
 			ages = np.asarray(agents.age, np.float32)[alive]
 			out["age (avg)"] = float(ages.mean())
-			# clip only for the speed denominator; the reported mean age is the raw one
-			out["speed (avg)"] = float((np.asarray(agents.distance_travelled, np.float32)[alive]
-			                            / np.clip(ages, 1, None)).mean())
+			denom = np.clip(ages, 1, None)
+			# clip only for the per-age denominators; the reported mean age is the raw one
+			out["speed (avg)"] = float((np.asarray(agents.distance_travelled, np.float32)[alive] / denom).mean())
+			out["angular speed (avg)"] = float((np.asarray(agents.total_abs_turn, np.float32)[alive] / denom).mean())
 			mask = getattr(agents.neural_state, "mask", None)
 			out["nb_neurons (avg)"] = float(np.asarray(mask).sum(-1)[alive].mean()) if mask is not None else np.nan
+			out["body size (avg)"] = float(np.asarray(agents.body.size, np.float32)[alive].mean())
+			if "diversity" in sel:
+				out["diversity"] = float(self._jit_diversity(self.state)) if self._jit_diversity is not None else np.nan
 		else:
-			for m in ("energy (avg)", "age (avg)", "speed (avg)", "nb_neurons (avg)"):
-				out[m] = np.nan
+			for k in ("energy (avg)", "age (avg)", "speed (avg)", "angular speed (avg)",
+			          "nb_neurons (avg)", "body size (avg)", "diversity"):
+				out[k] = np.nan
+		# patchiness of the realized food map (union of food types). Even vectorised the FFT is
+		# ~tens of ms on a large grid, and this runs inside the periodic callback, so throttle it
+		# to at most once per _HEAVY_METRIC_INTERVAL and reuse the cached value between — otherwise
+		# a big world would spend every refresh here and starve the UI event loop.
+		if sel & {"patchiness (len)", "patchiness (vmr)"}:
+			now = time.monotonic()
+			if now - self._last_patchiness_time >= _HEAVY_METRIC_INTERVAL:
+				from .metrics import food_patchiness
+				self._last_patchiness = food_patchiness(np.asarray(s.env_state.food).any(0))
+				self._last_patchiness_time = now
+			out["patchiness (len)"], out["patchiness (vmr)"] = self._last_patchiness
 		return out
 
 	def _record(self):
@@ -631,9 +800,21 @@ class SimApp:
 		self.history["step"].append(self.steps_done)
 		for k in _METRICS:
 			self.history[k].append(m.get(k, np.nan))
-		# append to the live charts (cheap: only the new point crosses the websocket)
-		self._cds.stream({"step": [self.steps_done],
-		                  **{k: [m.get(k, np.nan)] for k in _METRICS}})
+		# bound Python memory: only the latest history value is ever read (status / extinction)
+		if len(self.history["step"]) > _HISTORY_MAX:
+			for k in self.history:
+				del self.history[k][:-_HISTORY_MAX]
+
+		# chart: record a point every `_disp_stride` records, then halve the line in place when it
+		# hits the cap. This keeps the *whole* run visible at <= _DISPLAY_POINTS points, so bokeh's
+		# per-frame render cost (and the websocket traffic that was throttling the sim) stops growing.
+		self._disp_count += 1
+		if self._disp_count % self._disp_stride == 0:
+			self._cds.stream({"step": [self.steps_done],
+			                  **{k: [m.get(k, np.nan)] for k in _METRICS}})
+			if len(self._cds.data["step"]) > _DISPLAY_POINTS:
+				self._disp_stride *= 2
+				self._cds.data = {col: list(vals)[::2] for col, vals in self._cds.data.items()}
 	#-------------------------------------------------------------------
 	# --- view side --------------------------------------------------
 	def _build_widgets(self):
@@ -648,10 +829,17 @@ class SimApp:
 		self.seed_input = pn.widgets.IntInput(name="seed (applied on Reset)", value=0, step=1)
 		self.run_selector = pn.widgets.MultiSelect(name="runs on charts", options=[], size=5,
 		                                           sizing_mode="stretch_width")
+		# recolour the run(s) selected above to the chosen colour
+		self.run_color = pn.widgets.Select(name="recolour selected → ",
+		                                   options=[c for c, _ in _RUN_COLOURS], value="blue")
+		self.recolour_btn = pn.widgets.Button(name="Apply colour", button_type="default")
 		self.delete_runs_btn = pn.widgets.Button(name="Delete selected", button_type="warning")
 		self.clear_runs_btn = pn.widgets.Button(name="Clear all", button_type="danger")
-		self.record_every = pn.widgets.IntInput(name="refresh every (steps)", value=10, step=10,
-		                                        start=1, end=10000)
+		self.record_every = pn.widgets.IntInput(
+			name="record every (steps)", value=10, step=10, start=1, end=10000,
+			description="How often a data point is recorded onto the charts (in simulation steps). "
+			            "Larger = fewer points = less memory. The world/readouts still refresh "
+			            "smoothly regardless.")
 		self.start_btn = pn.widgets.Button(name="▶ Start", button_type="success")
 		self.stop_btn = pn.widgets.Button(name="■ Stop", button_type="danger", disabled=True)
 		# --- speed. Full speed simulates as fast as the device manages; throttling paces the run
@@ -660,6 +848,10 @@ class SimApp:
 		self.target_sps = pn.widgets.IntSlider(name="target steps/s", value=20, start=1, end=500,
 		                                       step=1)
 		self.render_image = pn.widgets.Checkbox(name="render world while running", value=True)
+		# turn both this and "render world" off to run the sim at full speed with no UI overhead:
+		# recording pulls metrics to the host (incl. the diversity device sync) and streams the
+		# charts, which is the main per-refresh cost once rendering is off
+		self.record_charts = pn.widgets.Checkbox(name="update charts / metrics", value=True)
 		self.color_by = pn.widgets.Select(name="colour agents by",
 		                                  options=["energy", "speed", "age", "nb_neurons", "flat"],
 		                                  value="energy")
@@ -682,6 +874,9 @@ class SimApp:
 		# model properties incrementally over the websocket, which stays responsive over an ssh
 		# tunnel, whereas a PNG pane re-sends the whole image base64-encoded on every update.
 		self.counter = Div(text="<h3>step 0</h3>", sizing_mode="stretch_width")
+		# live sim-speed readout, sits in the header to the right of the step counter
+		self.speed_counter = Div(text="<h3 style='text-align:right;color:#6c7a89'>— steps/s</h3>",
+		                         sizing_mode="stretch_width")
 		self.status = Div(text="", sizing_mode="stretch_width")
 		self._img_source = ColumnDataSource(data={"image": [np.zeros((1, 1), dtype=np.uint32)],
 		                                          "x": [0], "y": [0], "dw": [1], "dh": [1]})
@@ -707,7 +902,8 @@ class SimApp:
 		# --- agent inspector: grown network + internals ---
 		self._net_edges = ColumnDataSource(data={"x0": [], "y0": [], "x1": [], "y1": [],
 		                                         "color": [], "alpha": []})
-		self._net_nodes = ColumnDataSource(data={"x": [], "y": [], "color": [], "size": []})
+		self._net_nodes = ColumnDataSource(data={"x": [], "y": [], "color": [], "size": [],
+		                                         "idx": [], "sensory": [], "motor": [], "act": []})
 		self.net_fig = figure(sizing_mode="stretch_width", height=300, aspect_ratio=1,
 		                      x_range=(-1.1, 1.1), y_range=(-1.1, 1.1),
 		                      title="agent network (click an agent)", toolbar_location=None)
@@ -716,8 +912,16 @@ class SimApp:
 		self.net_fig.title.text_font_size = "9pt"
 		self.net_fig.segment("x0", "y0", "x1", "y1", source=self._net_edges,
 		                     line_color="color", line_alpha="alpha", line_width=1)
-		self.net_fig.scatter("x", "y", source=self._net_nodes, size="size", color="color",
+		nodes_r = self.net_fig.scatter("x", "y", source=self._net_nodes, size="size", color="color",
 		                     line_color="black", line_width=0.5)
+		# hover a neuron to read its properties (works with the toolbar hidden — hover is passive)
+		self.net_fig.add_tools(HoverTool(renderers=[nodes_r], attachment="right", tooltips=[
+			("neuron", "@idx"),
+			("position", "(@x{0.00}, @y{0.00})"),
+			("sensory expr.", "@sensory{0.000}"),
+			("motor expr.", "@motor{0.000}"),
+			("activation", "@act{0.000}"),
+		]))
 		self.agent_info = Div(text="<i>click an agent in the world to inspect it</i>",
 		                      sizing_mode="stretch_width")
 
@@ -759,6 +963,19 @@ class SimApp:
 		                      marker="marker", line_color="white")
 		self.mini_info = Div(text="", sizing_mode="stretch_width")
 
+		# --- genotype PCA: on-demand snapshot of the living population in genetic space ---
+		self.pca_color_by = pn.widgets.Select(name="PCA colour by",
+			options=["body_size", "generation", "nb_neurons", "energy"], value="body_size")
+		self.compute_pca_btn = pn.widgets.Button(name="Compute genotype PCA", button_type="primary")
+		self._pca_source = ColumnDataSource(data={"x": [], "y": [], "color": []})
+		self.pca_fig = figure(sizing_mode="stretch_width", height=300, aspect_ratio=1,
+		                      title="genotype PCA (compute to populate)", toolbar_location=None)
+		self.pca_fig.title.text_font_size = "9pt"
+		self.pca_fig.xaxis.axis_label = "PC1"; self.pca_fig.yaxis.axis_label = "PC2"
+		self.pca_fig.scatter("x", "y", source=self._pca_source, size=7, color="color",
+		                     line_color="black", line_width=0.3, fill_alpha=0.8)
+		self.pca_info = Div(text="", sizing_mode="stretch_width")
+
 		# --- checkpoints ---
 		self.ckpt_path = pn.widgets.TextInput(name="checkpoint file", value="data/checkpoint.ckpt")
 		self.save_ckpt_btn = pn.widgets.Button(name="Save ckpt", button_type="default")
@@ -778,22 +995,32 @@ class SimApp:
 		self._chart_figs = figs
 		figs[-1].xaxis.axis_label = "step"
 		# wrap each figure in a Bokeh pane that also stretches: panel wraps raw bokeh models
-		# automatically, but the implicit wrapper is fixed-size and would pin the layout
-		self.charts = pn.Column(*[pn.pane.Bokeh(f, sizing_mode="stretch_both") for f in figs],
-		                        sizing_mode="stretch_both")
+		# automatically, but the implicit wrapper is fixed-size and would pin the layout. Keep the
+		# panes so the metric selector can show/hide them individually.
+		self._chart_panes = [pn.pane.Bokeh(f, sizing_mode="stretch_both") for f in figs]
+		self.charts = pn.Column(*self._chart_panes, sizing_mode="stretch_both")
+		# which charts to show (and, for the expensive ones, whether to compute at all). Default to
+		# the cheap core metrics — patchiness (FFT) is opt-in.
+		default_metrics = [m for m in _METRICS if m not in ("patchiness (len)", "patchiness (vmr)")]
+		self.metric_select = pn.widgets.CheckBoxGroup(name="charts", options=_METRICS,
+		                                             value=default_metrics)
+		self._apply_metric_visibility()
 
 		self.load_btn.on_click(lambda e: self.load_config())
 		self.build_btn.on_click(self._on_build)
 		self.reset_btn.on_click(self._on_reset)
 		self.run_mini_btn.on_click(self._on_run_mini)
+		self.compute_pca_btn.on_click(self._on_compute_pca)
 		self.save_ckpt_btn.on_click(self._on_save_ckpt)
 		self.load_ckpt_btn.on_click(self._on_load_ckpt)
+		self.recolour_btn.on_click(self._recolour_selected)
 		self.delete_runs_btn.on_click(lambda e: self._delete_runs(list(self.run_selector.value)))
 		self.clear_runs_btn.on_click(lambda e: self._delete_runs([r["name"] for r in self._runs]))
 		self.start_btn.on_click(self._on_start)
 		self.stop_btn.on_click(self._on_stop)
 		self.color_by.param.watch(lambda e: self._refresh_image(), "value")
 		self.agent_px.param.watch(lambda e: self._refresh_image(), "value")
+		self.metric_select.param.watch(lambda e: self._apply_metric_visibility(), "value")
 		self.chem_overlay.param.watch(lambda e: self._refresh_image(), "value")
 		self.chem_gamma.param.watch(lambda e: self._refresh_image(), "value")
 		self.full_speed.param.watch(self._restart_loop, "value")
@@ -900,8 +1127,23 @@ class SimApp:
 		self._set_running_ui(True)
 		doc = pn.state.curdoc
 		if doc is not None:
+			# stop the loop if the browser/tunnel drops: an abrupt disconnect (e.g. laptop sleep)
+			# otherwise leaves the periodic callback writing to a document whose connection is gone,
+			# which raises "_pending_writes ..." and corrupts the plots for any reconnect
+			if not self._session_hooked:
+				try:
+					doc.on_session_destroyed(self._on_session_destroyed)
+					self._session_hooked = True
+				except Exception:
+					pass
 			_, period = self._tick_params()
 			self._cb = doc.add_periodic_callback(self._tick, period)   # runs with the doc lock held
+
+	def _on_session_destroyed(self, session_context=None):
+		"""Browser/tunnel dropped: halt stepping. Pure-Python only — the session is being torn
+		down, so touching the document here would itself error. Bokeh removes the callback."""
+		self.running = False
+		self._cb = None
 
 	def _on_stop(self, event=None):
 		"""Stop the run loop and draw a final frame."""
@@ -918,6 +1160,8 @@ class SimApp:
 		self._set_running_ui(False)
 		if was_running:
 			# turning rendering off during the run should still leave a current world on screen
+			self._speed_ema = 0.0
+			self.speed_counter.text = "<h3 style='text-align:right;color:#6c7a89'>paused</h3>"
 			self._refresh_image()
 
 	def _tick(self):
@@ -945,29 +1189,64 @@ class SimApp:
 			jax.block_until_ready(self.state.time)
 			self.counter.text = f"<h3>step {self.steps_done}</h3>"
 
-			# refresh on whichever comes first: `record_every` steps, or _MAX_REFRESH_GAP_MS of
-			# wall time. The time trigger requires at least one new step, so a slow run animates
-			# every step instead of stamping duplicate points onto the charts.
 			now = time.monotonic()
-			due_steps = self.steps_done - self._last_record >= max(1, int(self.record_every.value))
-			due_time = (self.steps_done > self._last_record
-			            and (now - self._last_record_time) * 1000 >= _MAX_REFRESH_GAP_MS)
-			if due_steps or due_time:
+			# --- record chart data every `record_every` steps. This is the *data* rate the user
+			# controls: larger record_every -> fewer points -> less memory and less per-record cost
+			# (metrics + diversity sync). Strictly step-based, so it is honoured whatever the speed.
+			if (self.record_charts.value
+			        and self.steps_done - self._last_record >= max(1, int(self.record_every.value))):
 				self._last_record = self.steps_done
-				self._last_record_time = now
-				self._record()                # also streams the new point to the charts
+				self._record()            # metrics + diversity sync + chart stream
+
+			# --- refresh the *display* on wall time (~10 fps), independent of the record rate, so the
+			# world and readouts stay smooth whatever record_every is. Uses only cheap scalars, so it
+			# never adds chart points. Requires at least one new step so it idles when paused.
+			if (self.steps_done > self._last_display_step
+			        and (now - self._last_display_time) * 1000 >= _MAX_REFRESH_GAP_MS):
+				# effective sim speed over the interval since the last display refresh (includes UI
+				# overhead, so it's the rate the user actually sees). EMA-smoothed to stop jittering.
+				dt = now - self._last_display_time
+				if dt > 0:
+					inst = (self.steps_done - self._last_display_step) / dt
+					self._speed_ema = inst if self._speed_ema <= 0 else 0.6 * self._speed_ema + 0.4 * inst
+					self.speed_counter.text = (f"<h3 style='text-align:right'>"
+					                           f"{self._speed_ema:,.0f} steps/s</h3>")
+				self._last_display_time = now
+				self._last_display_step = self.steps_done
 				if self.render_image.value:   # rendering is the costly part of a refresh
 					self._refresh_image()
-				# tracked independently of render_image: the marker and the inspector are their
-				# own glyphs, so following an agent still works with the world view turned off
+				# tracked independently: the marker/inspector are their own glyphs, so following an
+				# agent still works with the world off. Returns immediately when nothing is selected.
 				self._track_selected()
-				self._status_line()
-				if self.history["population"][-1] == 0:
+				# population: fresh cheap scalar, so the status line and extinction auto-stop stay
+				# responsive even when record_every is large (the richer status line adds food etc).
+				pop = int(self.state.agents_states.alive.sum())
+				if self.record_charts.value and self.history["step"]:
+					self._status_line()
+				else:
+					self._status(f"population <b>{pop}</b> · <i>charts off</i>")
+				if pop == 0:
 					self._on_stop()
 					self._status("population <b>extinct</b> — stopped", error=True)
 		except Exception as e:
-			self._on_stop()
-			self._status(f"<b>{type(e).__name__}</b>: <code>{e}</code>", error=True)
+			# a simulation error, or the browser/tunnel dropped mid-write. Stop with pure-Python
+			# state first so the loop halts even if the connection is dead (any tick then returns at
+			# the `if not self.running` guard, ending the '_pending_writes' error spam); the doc
+			# writes below are best-effort and swallowed if the connection is already gone.
+			self.running = False
+			cb, self._cb = self._cb, None
+			try:
+				doc = pn.state.curdoc
+				if doc is not None and cb is not None:
+					doc.remove_periodic_callback(cb)
+			except Exception:
+				pass
+			for update in (lambda: self._set_running_ui(False),
+			               lambda: self._status(f"<b>{type(e).__name__}</b>: <code>{e}</code>", error=True)):
+				try:
+					update()
+				except Exception:
+					pass
 
 	def _set_running_ui(self, running: bool):
 		self.start_btn.disabled = running
@@ -1041,19 +1320,24 @@ class SimApp:
 			pn.Row(self.start_btn, self.stop_btn, sizing_mode="stretch_width"),
 			self.full_speed, self.target_sps,
 			self.record_every,
-			self.render_image, self.color_by, self.agent_px,
+			self.render_image, self.record_charts, self.color_by, self.agent_px,
+			pn.pane.Markdown("**charts to show** (patchiness = extra cost)", margin=(6, 0, -6, 0)),
+			self.metric_select,
 			pn.pane.Markdown("**chemicals**", margin=(6, 0, -6, 0)),
 			self.chem_overlay, self.chem_gamma,
 			pn.pane.Markdown("**food brush** — click the world", margin=(6, 0, -6, 0)),
 			self.click_mode, self.brush_type, self.brush_radius, self.brush_density,
 			self.run_selector,
+			pn.Row(self.run_color, self.recolour_btn, sizing_mode="stretch_width"),
 			pn.Row(self.delete_runs_btn, self.clear_runs_btn, sizing_mode="stretch_width"),
 			self.ckpt_path,
 			pn.Row(self.save_ckpt_btn, self.load_ckpt_btn, sizing_mode="stretch_width"),
 			width=360, sizing_mode="stretch_height", scroll=True,
 		)
 		world = pn.Column(
-			pn.pane.Bokeh(self.counter, sizing_mode="stretch_width"),
+			pn.Row(pn.pane.Bokeh(self.counter, sizing_mode="stretch_width"),
+			       pn.pane.Bokeh(self.speed_counter, sizing_mode="stretch_width"),
+			       sizing_mode="stretch_width"),
 			pn.pane.Bokeh(self.status, sizing_mode="stretch_width"),
 			pn.pane.Bokeh(self.image, sizing_mode="stretch_both"),
 			sizing_mode="stretch_both")
@@ -1064,6 +1348,10 @@ class SimApp:
 			self.mini_use_grown, self.run_mini_btn,
 			pn.pane.Bokeh(self.mini_fig, sizing_mode="stretch_width"),
 			pn.pane.Bokeh(self.mini_info, sizing_mode="stretch_width"),
+			pn.pane.Markdown("**genotype space**", margin=(6, 0, -6, 0)),
+			self.pca_color_by, self.compute_pca_btn,
+			pn.pane.Bokeh(self.pca_fig, sizing_mode="stretch_width"),
+			pn.pane.Bokeh(self.pca_info, sizing_mode="stretch_width"),
 			width=340, sizing_mode="stretch_height", scroll=True)
 		return pn.Row(controls, world, inspector, self.charts,
 		              sizing_mode="stretch_both")

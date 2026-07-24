@@ -6,9 +6,11 @@ simulation:
   wall_effect: none
 logging:
   wandb_log: true
+  log_freq: 100
   sampling_freq: 10000
   sampling_size: 32
   ckpt_freq: null
+  plot_networks: 25
   wandb_project: eedx
 ct-1:
   diffusion_rate: 5.0
@@ -25,33 +27,35 @@ ft-1:
   chemical_signature: 1
   energy_concentration: 2
   spontaneous_grow_prob: 1e-8
-  initial_density: 0.0
+  initial_density: 0.05
 env:
   size:
-  - 1024
-  - 1024
-  chemicals_detection_threshold: 1.e-05
+  - 512
+  - 512
+  chemicals_detection_threshold: 1.0e-05
   walls_density: 0.0
 agents:
   body_resolution: 8
   init_energy: 1.5
   max_energy: 15.0
-  basal_energy_loss: 0.02
-  size_energy_cost: 0.0
-  reproduction_energy_cost: 0.0
+  basal_energy_loss: 0.0
+  size_energy_cost: 0.02
+  reproduction_energy_cost: 1.0
   time_above_threshold_to_reproduce: 100
   time_below_threshold_to_die: 50
-  min_body_size: 4.0
-  max_body_size: 4.0
+  min_body_size: 1.0
+  max_body_size: 8.0
   max_age: 10000
   motor:
     which: ciliated_torque
     border_size: 0.3
     thrust_gain: 0.05
     max_beat: 0.1
-    max_velocity: 2.0
+    max_velocity: 0.5
     max_angular_speed: 0.785
     motor_energy_cost: 0.05
+    size_speed_exponent: 0.5
+    size_cost_exponent: 1.5
     dt: 1.0
   sensory:
     which: spatially_embedded
@@ -59,17 +63,22 @@ agents:
     sensor_expression_threshold: 0.1
   nn:
     which: rand_ctrnn
+    body_morphogens: true
     init_neurons: 1
-    max_neurons: 128
+    max_neurons: 64
     sensory_genes: 7
     motor_genes: 1
     regulatory_genes: 8
     synaptic_genes: 4
     synaptic_proteins: 4
+    body_morphogens: true
     wiring_model: mlp
+    min_neuron_distance: 0.1
+    wiring_model_kwargs: 
+        final_activation: tanh
     dev_iters: 100
   mutation:
     which: generalized
     sigma: 0.03
     p_mut: 1.0
-    sigma_size: 0.0
+    sigma_size: 0.05

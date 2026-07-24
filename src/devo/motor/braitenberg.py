@@ -81,8 +81,14 @@ class BraitenbergMotorInterface(MotorInterface):
 
 	# ------------------------------------------------------------------
 
-	def decode(self, neural_state: NeuralState, motor_state: MotorState) -> tuple[Action, Float, MotorState, Info]:
-		
+	def actuate(self, neural_state: NeuralState, motor_state: MotorState, body: Body, key: jax.Array) -> tuple[Body, Float, MotorState, Info]:
+		action, energy_loss, motor_state, info = self._decode(neural_state, motor_state)
+		return self.move(action, body), energy_loss, motor_state, {**info, "action": action}
+
+	# ------------------------------------------------------------------
+
+	def _decode(self, neural_state: NeuralState, motor_state: MotorState) -> tuple[Action, Float, MotorState, Info]:
+
 		if self.interface == "se":
 			return self._decode_se(neural_state, motor_state)
 		elif self.interface == "direct":

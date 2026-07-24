@@ -34,6 +34,14 @@ class AgentConfig(PyTreeNode):
 	# first channel. Constant over a run: it is copied into every genotype at init and passed
 	# through mutation unchanged, so it is a property of the setup, not an evolving trait.
 	chemical_signature: tuple[float,...]|None=None
+	# Allometric exponents applied directly to body size L (like the motor interface's
+	# size_speed_exponent / size_cost_exponent), so a bigger body's costs scale as L**exponent.
+	#  - size_energy_exponent (maintenance, per-step metabolic rate): default 1.5 is Kleiber's law
+	#    B ~ M^(3/4) written for a linear size with 2D "mass" M ~ L^2, i.e. B ~ (L^2)^0.75 = L^1.5.
+	#  - reproduction_energy_exponent (one-time cost to build an offspring's body): default 2.0 (~ L^2),
+	#    since a build cost scales with total body mass, not with Kleiber's *rate* exponent.
+	size_energy_exponent: float=1.5
+	reproduction_energy_exponent: float=2.0
 	# ------------------------------------------------------------------
 
 class Genotype(PyTreeNode):
@@ -68,6 +76,7 @@ class AgentState(PyTreeNode):
 	# --- infos
 	n_offsprings: UInt16
 	distance_travelled: Float
+	total_abs_turn: Float          # lifetime sum of |heading change|; /age -> mean angular speed
 	generation: UInt32
 	id_: UInt32
 	parent_id_: UInt32

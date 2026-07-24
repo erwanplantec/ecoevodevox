@@ -85,9 +85,9 @@ class AgentInterface(eqx.Module):
 
 		self._get_body_points = _get_body_points
 	# ------------------------------------------------------------------
-	def step(self, env_obs: jax.Array, state: AgentState, key: jax.Array)->Tuple[Action,AgentState,dict]:
+	def step(self, env_obs: jax.Array, state: AgentState, key: jax.Array)->Tuple[AgentState,dict]:
 		"""Make 1 update step of agent:
-			encode -> neural update -> decode
+			encode -> neural update -> actuate (moves the body). Returns (new_state, infos).
 		"""
 		# 1. encode observation
 		internals = jnp.stack(
@@ -96,34 +96,52 @@ class AgentInterface(eqx.Module):
 	        state.time_above_threshold/self.cfg.time_above_threshold_to_reproduce,
 	        state.time_below_threshold/self.cfg.time_below_threshold_to_die], 
        	axis=-1)
+		key_neural, key_motor = jr.split(key)
 		obs = Observation(env=env_obs, internal=internals)
 		neural_input, sensory_energy_loss, sensory_state, sensory_info = self.encode_observation(obs, state.neural_state, state.sensory_state)
 		# 2. neural update
-		neural_state, neural_energy_loss = self.neural_step(state.genotype.neural_params, neural_input, state.neural_state, key)
-		# 3. decode neural
-		action, motor_energy_loss, motor_state, motor_info = self.decode_neural(neural_state, state.motor_state)
-		# 4. compute energy loss (size, basal, motor, neural, sensory)
-		# use the realized (clipped) body size, not the raw genotype value, which mutation can
-		# drive negative -> a negative size cost that generates energy for free
-		size_energy_loss = self.cfg.size_energy_cost * state.body.size
+		neural_state, neural_energy_loss = self.neural_step(state.genotype.neural_params, neural_input, state.neural_state, key_neural)
+		# 3. actuate: turn the neural/motor state into the moved body + the action's energy cost.
+		# The body is moved here (raw, unwrapped); the world wraps it toroidally afterwards. The
+		# `action` itself is only exposed via motor_info["action"] for behaviour analysis.
+		new_body, motor_energy_loss, motor_state, motor_info = self._motor_interface.actuate(
+			neural_state, state.motor_state, state.body, key_motor)
+		# distance from the true (pre-wrap) displacement; gated on alive so corpses don't accrue it
+		step_dist = jnp.linalg.norm((new_body.pos - state.body.pos).astype(jnp.float32), axis=-1)
+		distance = state.distance_travelled + jnp.where(state.alive, step_dist, 0.0)
+		# lifetime turning: |heading change| wrapped to [-pi, pi] so crossing 0/2pi isn't counted as
+		# a near-full turn (heading is stored mod 2pi). /age later gives the mean angular speed.
+		dtheta = jnp.mod((new_body.heading - state.body.heading).astype(jnp.float32) + jnp.pi, 2*jnp.pi) - jnp.pi
+		total_turn = state.total_abs_turn + jnp.where(state.alive, jnp.abs(dtheta), 0.0)
+		# 4. compute energy loss (size, basal, motor, neural, sensory).
+		# Maintenance (metabolic rate) scales as L**size_energy_exponent, default 1.5 = Kleiber (see
+		# AgentConfig). Uses the realized (clipped) body size, not the raw genotype value which
+		# mutation can drive negative.
+		size_energy_loss = self.cfg.size_energy_cost * state.body.size ** self.cfg.size_energy_exponent
 		energy_loss = size_energy_loss + self.cfg.basal_energy_loss + motor_energy_loss + neural_energy_loss + sensory_energy_loss
 		energy = state.energy - energy_loss
 
 		state = state.replace(
-			neural_state=neural_state, 
-			motor_state=motor_state, 
-			sensory_state=sensory_state, 
+			neural_state=neural_state,
+			motor_state=motor_state,
+			sensory_state=sensory_state,
+			body=new_body,
 			energy=energy,
-			age=state.age+1  
+			age=state.age+1,
+			distance_travelled=distance,
+			total_abs_turn=total_turn,
 		)
 
-		infos = {"motor_energy_loss": motor_energy_loss, 
-				 "neural_energy_loss": neural_energy_loss, 
-				 "sensory_energy_loss": sensory_energy_loss, 
+		# drop the raw action vector from the propagated infos (it is per-agent variable-length and
+		# would break metric histogramming); its norm stays as a scalar
+		motor_info = {k: v for k, v in motor_info.items() if k != "action"}
+		infos = {"motor_energy_loss": motor_energy_loss,
+				 "neural_energy_loss": neural_energy_loss,
+				 "sensory_energy_loss": sensory_energy_loss,
 				 **motor_info,
 				 **sensory_info}
 
-		return action, state, infos
+		return state, infos
 	# ------------------------------------------------------------------
 	def init(self, genotype: Genotype, position: jax.Array, heading: jax.Array, 
 	         id_: UInt32, parent_id_: UInt32|None=None, generation: UInt32|None=None, 
@@ -157,6 +175,7 @@ class AgentInterface(eqx.Module):
 		                   time_below_threshold=jnp.zeros((), dtype=jnp.uint16),
 						   n_offsprings=jnp.zeros((), jnp.uint16),
 						   distance_travelled=jnp.zeros((), dtype=jnp.float32),
+						   total_abs_turn=jnp.zeros((), dtype=jnp.float32),
 						   generation=generation if generation is not None else jnp.ones((), dtype=jnp.uint32),
 						   id_=id_,
 						   parent_id_=parent_id_ if parent_id_ is not None else jnp.zeros((), dtype=jnp.uint32))
@@ -166,7 +185,11 @@ class AgentInterface(eqx.Module):
 		return state.replace(energy=jnp.clip(state.energy + energy_intake, -jnp.inf, self.cfg.max_energy))
 	# ------------------------------------------------------------------
 	def update_after_reproduction(self, state: AgentState, has_reproduced: Bool) -> AgentState:
-		return state.replace(energy = state.energy - (has_reproduced * self.cfg.reproduction_energy_cost),
+		# reproduction cost scales as L**reproduction_energy_exponent (default 2.0 ~ body mass:
+		# building a bigger body is proportionally more expensive); the child inherits the parent's
+		# size, so use it here
+		repro_cost = has_reproduced * self.cfg.reproduction_energy_cost * state.body.size ** self.cfg.reproduction_energy_exponent
+		return state.replace(energy = state.energy - repro_cost,
 		                     time_above_threshold = jnp.where(has_reproduced, 0, state.time_above_threshold),
 		                     n_offsprings = jnp.where(has_reproduced, state.n_offsprings+1, state.n_offsprings))
 	# ------------------------------------------------------------------
@@ -192,11 +215,8 @@ class AgentInterface(eqx.Module):
 	def neural_fctry(self, key: jax.Array)->NeuralParams:
 		return self._neural_fctry(key)
 	# ------------------------------------------------------------------
-	def move(self, action: Action, body: Body)->Body:
-		return self._motor_interface.move(action,body)
-	# ------------------------------------------------------------------
-	def decode_neural(self, neural_state: NeuralState, motor_state: MotorState)->tuple[Action,Float16,MotorState,dict]:
-		return self._motor_interface.decode(neural_state, motor_state)
+	def actuate(self, neural_state: NeuralState, motor_state: MotorState, body: Body, key: jax.Array)->tuple[Body,Float16,MotorState,dict]:
+		return self._motor_interface.actuate(neural_state, motor_state, body, key)
 	# ------------------------------------------------------------------
 	def encode_observation(self, obs: Observation, neural_state: NeuralState, sensory_state: SensoryState)->tuple[NeuralInput,Float16,SensoryState,dict]:
 		return self._sensory_interface.encode(obs, neural_state, sensory_state)

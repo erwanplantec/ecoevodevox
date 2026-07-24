@@ -57,8 +57,10 @@ def _state(active_idx: list[int], value: float = 1.0) -> FakeNeuralState:
 def _drive(interface: CiliatedMotorInterface, active_idx: list[int], value: float = 1.0):
 	"""Return (velocity, omega) the interface produces for the given active cilia."""
 	layout = interface.init(_state([]), key=jr.key(0))  # layout is activation-independent
-	action, energy_loss, _, info = interface.decode(_state(active_idx, value), layout)
-	velocity, omega = float(action[0]), float(action[1])
+	body = Body(pos=jnp.zeros(2, dtype=jnp.float16), heading=jnp.float16(0.0), size=jnp.float16(2.0))
+	# actuate fuses decode+move; the decoded action is exposed via info for exactly this kind of check
+	_, energy_loss, _, info = interface.actuate(_state(active_idx, value), layout, body, jr.key(0))
+	velocity, omega = float(info["action"][0]), float(info["action"][1])
 	return velocity, omega, float(energy_loss)
 
 
@@ -130,8 +132,7 @@ def _rollout(interface, neural_state, layout, steps: int, heading0: float = 0.0)
 	body = Body(pos=jnp.zeros(2, dtype=jnp.float16), heading=jnp.float16(heading0), size=jnp.float16(2.0))
 	traj = [(float(body.pos[0]), float(body.pos[1]), float(body.heading))]
 	for _ in range(steps):
-		action, _, _, _ = interface.decode(neural_state, layout)
-		body = interface.move(action, body)
+		body, _, _, _ = interface.actuate(neural_state, layout, body, jr.key(0))
 		traj.append((float(body.pos[0]), float(body.pos[1]), float(body.heading)))
 	return traj
 

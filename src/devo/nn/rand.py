@@ -32,11 +32,13 @@ class BarabasiWiringModel(WiringModel):
     
 class MLPWiringModel(WiringModel):
     mlp: nn.MLP
-    def __init__(self, nb_proteins: int, width: int=16, depth: int=1, *,  key: jax.Array):
+    weight_activation: Callable
+    def __init__(self, nb_proteins: int, width: int=16, depth: int=1, final_activation: str|None=None, *,  key: jax.Array):
+        self.weight_activation = (lambda x: x) if final_activation is None else getattr(jnn, final_activation)
         self.mlp = nn.MLP(nb_proteins, 2, width, depth, key=key)
     def __call__(self, pre, post):
         w, gate =  self.mlp(pre-post)
-        return w * jnn.sigmoid(gate)
+        return self.weight_activation(w) * jnn.sigmoid(gate)
 
 class RANDDevelopmentalState(PyTreeNode):
     s: jax.Array # gene expression
@@ -80,11 +82,15 @@ class RAND_CTRNN(IndirectCTRNN):
     gene_noise_scale: float
     position_noise_scale: float
     fixed_morphogen_field: Callable
+    min_neuron_distance: float
+    neuron_repulsion_strength: float
+    neuron_gate_sharpness: float
     # ---
     def __init__(self, init_neurons=1, max_neurons=128, regulatory_genes=8, migratory_genes=4, signalling_genes=2, sensory_genes=1, motor_genes=1,
-                 synaptic_genes=4, synaptic_proteins=4, signalling_proteins=4, max_mitosis=10, mitotic_factor_threshold=10.0, apoptosis_factor_threshold=10.0, 
+                 synaptic_genes=4, synaptic_proteins=4, signalling_proteins=4, max_mitosis=10, mitotic_factor_threshold=10.0, apoptosis_factor_threshold=10.0,
                  wiring_model: str="barabasi", wiring_model_kwargs: dict={}, grn_model="continuous", autonomous_decay=True, dev_iters=400, gene_noise_scale=0.0, position_noise_scale=0.0,
-                 neuron_params_genes=1, expression_bounds=(0.0, 1.0), motor_activation_fn=lambda x:x, sensory_activation_fn=lambda x:x, 
+                 neuron_params_genes=1, expression_bounds=(0.0, 1.0), motor_activation_fn=lambda x:x, sensory_activation_fn=lambda x:x,
+                 min_neuron_distance: float=0.0, neuron_repulsion_strength: float=0.1, neuron_gate_sharpness: float=8.0,
                  ctrnn_activation: str|Callable="tanh", ctrnn_dt: float=0.1, ctrnn_T: float=1.0, fixed_morphogen_field: Callable=M, *, key: jax.Array):
         """Initialize the RAND (Regulation based Neural Development) model.
         
@@ -143,12 +149,12 @@ class RAND_CTRNN(IndirectCTRNN):
         
         kin, kex, kmigr, kpert, kbias, ksyn, kwiring, ktau, kneur, ksig_decay = jr.split(key, 10)
         
+        fixed_morphogens = len(fixed_morphogen_field(jnp.zeros(2,)))
         self.W_in = jr.uniform(kin, (total_genes, total_genes), minval=-1.0, maxval=1.0)
-        self.W_ex = jr.uniform(kex, (5+signalling_proteins, total_genes), minval=-1.0, maxval=1.0)
+        self.W_ex = jr.uniform(kex, (fixed_morphogens+signalling_proteins, total_genes), minval=-1.0, maxval=1.0)
         self.bias = jr.uniform(kbias, (total_genes,), minval=-1.0, maxval=1.0)
         self.logtau = jr.normal(ktau, (total_genes,)) * 0.1
         
-        fixed_morphogens = len(fixed_morphogen_field(jnp.zeros(2,)))
         self.fixed_morphogen_field = fixed_morphogen_field
         self.W_migr = jr.normal(kmigr, (migratory_genes,signalling_proteins+fixed_morphogens))
         self.W_sign = jr.normal(kpert, (signalling_genes,signalling_proteins))
@@ -177,6 +183,11 @@ class RAND_CTRNN(IndirectCTRNN):
         self.sensory_activation_fn = sensory_activation_fn
         self.gene_noise_scale = gene_noise_scale
         self.position_noise_scale = position_noise_scale
+        # physical exclusion: soft pairwise repulsion keeps live neurons >= min_neuron_distance
+        # apart during migration. 0 disables it (default; development unchanged).
+        self.min_neuron_distance = min_neuron_distance
+        self.neuron_repulsion_strength = neuron_repulsion_strength
+        self.neuron_gate_sharpness = neuron_gate_sharpness   # sigmoid steepness of the repulsion gate
     # ---
     def init_embryo(self, key: jax.Array)->RANDDevelopmentalState:
         """Initialize the state of the RAND model.
@@ -247,7 +258,16 @@ class RAND_CTRNN(IndirectCTRNN):
 
             mask = state.mask.at[buffer_ids].set(mitosis_mask)
             s = state.s.at[buffer_ids].set(state.s[mitotic_ids])
-            x = state.x.at[buffer_ids].set(state.x[mitotic_ids] + jr.normal(k2, (self.max_mitosis,2))*0.01)
+            # place each daughter a set distance from its parent. With the exclusion constraint on,
+            # offset by min_neuron_distance in a random direction so the daughter starts already
+            # non-overlapping (the compact repulsion has no force at exactly d_min); otherwise the
+            # original tiny jitter. Clip so a daughter of an edge cell stays in the body frame.
+            if self.min_neuron_distance > 0.0:
+                ang = jr.uniform(k2, (self.max_mitosis,), minval=0.0, maxval=2*jnp.pi)
+                offset = self.min_neuron_distance * jnp.stack([jnp.cos(ang), jnp.sin(ang)], axis=-1)
+            else:
+                offset = jr.normal(k2, (self.max_mitosis, 2)) * 0.01
+            x = state.x.at[buffer_ids].set(jnp.clip(state.x[mitotic_ids] + offset, -1., 1.))
             mitotic_factors = state.mitotic_factors.at[mitotic_ids].set(0)
             mitotic_factors = mitotic_factors.at[buffer_ids].set(0)
         
@@ -285,17 +305,49 @@ class RAND_CTRNN(IndirectCTRNN):
         # --- Migration step
         genes = jax.vmap(self.genes_shaper)(state.s)
         s_mvt, s_migr = genes["speed"], genes["migratory"]
-        
+
         lambda_ = s_migr@self.W_migr
-        
+
+        # migratory (chemotactic) force: the gene-weighted morphogen-field gradient, as before.
         @jax.grad
-        def energy_fn(x, lambda_):
-            return jnp.sum(lambda_*M_(x), axis=-1)
-        
+        def migratory_energy(x, lam):
+            return jnp.sum(lam*M_(x), axis=-1)
+        grad_m = jax.vmap(migratory_energy)(state.x, lambda_)     # [N, 2]
+
         vel = s_mvt
-        dx = -jax.vmap(energy_fn)(state.x, lambda_)
+        # --- physical exclusion as a gated blend, not an additive term ---
+        # Every neuron emits a compactly-supported "crowding" bump ((max(0, 1 - r^2/d^2))^2, exactly
+        # 0 in value AND gradient beyond min_neuron_distance, so the repulsion is strictly local and
+        # NaN-safe). Rather than SUM the crowding gradient with the migratory one -- where an evolved,
+        # unbounded lambda_ can simply overwhelm it and let neurons coincide -- we BLEND the two:
+        #     dx = -( a * grad_repulsion + (1-a) * grad_migration )
+        # with a = 1 at overlap and 0 once the nearest live neighbour is >= d_min. So a physical
+        # constraint takes precedence over behaviour exactly where it is violated, regardless of how
+        # large the migratory gradient is. `a` is stop-gradient (it depends on a min over neighbours,
+        # whose gradient would inject a spurious force).
+        if self.min_neuron_distance > 0.0:
+            @jax.grad
+            def repulsion_energy(x):
+                r2 = jnp.sum((x[None] - state.x)**2, axis=-1)
+                bump = jnp.clip(1.0 - r2 / (self.min_neuron_distance**2), 0.0, None)**2
+                return self.neuron_repulsion_strength * jnp.sum(bump * state.mask)
+            grad_r = jax.vmap(repulsion_energy)(state.x)          # [N, 2]
+
+            dmat = jnp.sqrt(jnp.sum((state.x[:, None] - state.x[None])**2, axis=-1) + 1e-9)
+            dmat = jnp.where(state.mask[None] & (~jnp.eye(self.max_neurons, dtype=bool)), dmat, jnp.inf)
+            d_near = jnp.min(dmat, axis=1)                        # nearest live neighbour, [N]
+            # sigmoid gate centred at d_min: a ~ 1 (pure repulsion) well inside d_min, ~0 (pure
+            # migration) well beyond, smoothly through 0.5 at d_min. neuron_gate_sharpness tunes it
+            # from ramp-like (small) to step-like (large); a smooth gate avoids chattering while
+            # still cutting migration hard enough inside d_min that an unbounded lambda_ can't keep
+            # neurons coincident. stop_gradient: the min-based weight must not add a spurious force.
+            a = jax.lax.stop_gradient(jnn.sigmoid(self.neuron_gate_sharpness
+                                                  * (1.0 - d_near / self.min_neuron_distance)))
+            dx = -(a[:, None]*grad_r + (1.0 - a[:, None])*grad_m)
+        else:
+            dx = -grad_m
+
         dx = jnp.clip(dx, -1., 1.) + (jr.normal(key_position, dx.shape)*self.position_noise_scale)
-        
         x = jnp.clip(state.x + 0.05*dx*vel, -1., 1.)
         x = jnp.where(state.mask[:,None], x, 0.)
 

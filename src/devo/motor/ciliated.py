@@ -114,7 +114,14 @@ class CiliatedMotorInterface(MotorInterface):
 
 	# ------------------------------------------------------------------
 
-	def decode(self, neural_state: NeuralState, motor_state: CiliatedMotorState) -> tuple[Action, Float, CiliatedMotorState, Info]:
+	def actuate(self, neural_state: NeuralState, motor_state: CiliatedMotorState,
+	            body: Body, key: jax.Array) -> tuple[Body, Float, CiliatedMotorState, Info]:
+		action, energy_loss, motor_state, info = self._decode(neural_state, motor_state)
+		return self.move(action, body), energy_loss, motor_state, {**info, "action": action}
+
+	# ------------------------------------------------------------------
+
+	def _decode(self, neural_state: NeuralState, motor_state: CiliatedMotorState) -> tuple[Action, Float, CiliatedMotorState, Info]:
 
 		# Thrust per neuron: beat rate (non-negative, gated by activation) times cilium size.
 		# `max_beat` caps how fast a cilium can beat, so it applies to the rate; size then scales

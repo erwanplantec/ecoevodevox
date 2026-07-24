@@ -84,6 +84,7 @@ class MiniEnv:
 			time_below_threshold=jnp.zeros((), dtype=jnp.uint16),
 			n_offsprings=jnp.zeros((), dtype=jnp.uint16),
 			distance_travelled=jnp.zeros((), dtype=jnp.float32),
+			total_abs_turn=jnp.zeros((), dtype=jnp.float32),
 			generation=jnp.ones((), dtype=jnp.uint32),
 			id_=jnp.ones((), dtype=jnp.uint32),
 			parent_id_=jnp.zeros((), dtype=jnp.uint32),
@@ -112,11 +113,11 @@ class MiniEnv:
 	#-------------------------------------------------------------------
 	def step(self, state: MiniEnvState, key: jax.Array) -> MiniEnvState:
 		obs = self.get_observation(state)
-		action, agent_state, _ = self.agent_interface.step(obs, state.agent_state, key)
-		new_body = self.agent_interface.move(action, agent_state.body)
-		# the mini world is bounded (not toroidal): keep the body inside the grid
-		bound = jnp.asarray(self.grid_size, dtype=new_body.pos.dtype) - jnp.asarray(1e-3, new_body.pos.dtype)
-		new_body = new_body.replace(pos=jnp.clip(new_body.pos, 0.0, bound))
+		# step now moves the body itself (actuate); the mini world is bounded (not toroidal), so we
+		# clip the moved body into the grid here instead of the simulator's toroidal wrap
+		agent_state, _ = self.agent_interface.step(obs, state.agent_state, key)
+		bound = jnp.asarray(self.grid_size, dtype=agent_state.body.pos.dtype) - jnp.asarray(1e-3, agent_state.body.pos.dtype)
+		new_body = agent_state.body.replace(pos=jnp.clip(agent_state.body.pos, 0.0, bound))
 		return state.replace(agent_state=agent_state.replace(body=new_body))
 	#-------------------------------------------------------------------
 	def rollout(self, params: NeuralParams, steps: int, key: jax.Array,

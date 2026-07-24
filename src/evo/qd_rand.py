@@ -605,10 +605,10 @@ def make_rand_embodied_scoring_fn(model: RAND_CTRNN,
 				k_obs, k = jr.split(k)
 				obs = obs_fn(body, k_obs)  #type:ignore[misc]
 				I, _, sensory_state, _ = sensory_interface.encode(obs, net, sensory_state)
-			net, _ = apply_fn(genotype, I, net, k)
-			action, _, motor_state, _ = motor_interface.decode(net, motor_state)
-			body = motor_interface.move(action, body)
-			return (net, body, sensory_state, motor_state), (body.pos, body.heading, action, net.v)
+			k_apply, k_act = jr.split(k)
+			net, _ = apply_fn(genotype, I, net, k_apply)
+			body, _, motor_state, motor_info = motor_interface.actuate(net, motor_state, body, k_act)
+			return (net, body, sensory_state, motor_state), (body.pos, body.heading, motor_info["action"], net.v)
 
 		_, (pos, heading, action, v) = jax.lax.scan(
 			_step, (net, body, sensory_state, motor_state), jr.split(key_scan, steps)

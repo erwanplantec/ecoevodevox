@@ -184,14 +184,14 @@ class Simulator:
 
         env_obs = self.world.get_agents_observations(sim_state.env_state, bodies_points, agents_chemical_sources, key=key_obs)
 
-        # --- 3. update agents internal states and retrieve action ---
-        actions, agents_states, agents_step_data = jax.vmap(self.agent_interface.step)(
+        # --- 3. update agents: encode -> neural -> actuate (moves the body, raw/unwrapped) ---
+        agents_states, agents_step_data = jax.vmap(self.agent_interface.step)(
             env_obs, sim_state.agents_states, jr.split(key_agents, self.cfg.max_agents)
         )
         sim_state = sim_state.replace(agents_states=agents_states)
 
-        # --- 4. apply effect of actions ---
-        sim_state = self.apply_agents_actions(actions, sim_state)
+        # --- 4. world-level boundary handling: toroidal wrap + wall effects ---
+        sim_state = self.apply_agents_actions(sim_state)
 
         # --- 5. let agents eat ---
         sim_state = self.update_agents_and_food(sim_state)
@@ -203,19 +203,18 @@ class Simulator:
 
     # ------------------------------------------------------------------
 
-    def apply_agents_actions(self, actions: Action, sim_state: SimulationState) -> SimulationState:
-        """move agents according to actions and apply effects of env (walls)"""
-        
+    def apply_agents_actions(self, sim_state: SimulationState) -> SimulationState:
+        """World-level boundary handling after the agents have moved in `step`.
+
+        Bodies were already moved (raw, unwrapped) inside `AgentInterface.step`, and
+        `distance_travelled` accumulated there from the pre-wrap displacement. Here the world wraps
+        them toroidally and applies wall effects — both properties of the world, not the agent."""
+
         agents_states, env_state = sim_state.agents_states, sim_state.env_state
-        # --- 1. move agents and check wall contact ---
-        moved_bodies = jax.vmap(self.agent_interface.move)(actions, sim_state.agents_states.body)
-        new_bodies = self.world.normalize_posture(moved_bodies)
-        # measure the step from the pre-wrap position: normalize_posture wraps toroidally, so
-        # crossing a boundary would otherwise count as a ~world-width jump
-        step_distance = jnp.linalg.norm((moved_bodies.pos - agents_states.body.pos).astype(jnp.float32), axis=-1)
-        agents_distance = agents_states.distance_travelled + jnp.where(agents_states.alive, step_distance, 0.0)
+        # --- 1. toroidal wrap + wall contact on the moved bodies ---
+        new_bodies = self.world.normalize_posture(agents_states.body)
         new_bodies_points = jax.vmap(self.agent_interface.get_body_points)(new_bodies)
-        makes_contact = jax.vmap(self.world.check_wall_contact, in_axes=(None,0))(env_state, new_bodies_points) * sim_state.agents_states.alive
+        makes_contact = jax.vmap(self.world.check_wall_contact, in_axes=(None,0))(env_state, new_bodies_points) * agents_states.alive
         # --- 2. apply effect of contact ---
         if self.cfg.wall_effect=="kill":
             agents_alive = agents_states.alive & (~makes_contact)
@@ -229,8 +228,7 @@ class Simulator:
         else:
             raise ValueError(f"wall effect {self.cfg.wall_effect} is not valid")
 
-        new_agents_states = agents_states.replace(body=new_bodies, alive=agents_alive, energy=agents_energy,
-                                                  distance_travelled=agents_distance)
+        new_agents_states = agents_states.replace(body=new_bodies, alive=agents_alive, energy=agents_energy)
 
         return sim_state.replace(agents_states=new_agents_states)
 
@@ -412,9 +410,11 @@ class Simulator:
         log_cfg = cfg["logging"]
         logger = Logger(wandb_log=log_cfg.get("wandb_log", False),
                         name=log_cfg.get("name", None),
+                        log_freq=log_cfg.get("log_freq", 1),
                         ckpt_freq=log_cfg.get("ckpt_freq", None),
                         sampling_freq=log_cfg.get("sampling_freq", None),
                         sampling_size=log_cfg.get("sampling_size", None),
+                        plot_networks=log_cfg.get("plot_networks", 0),
                         metrics_fn=metrics_fn,
                         host_log_transform=host_log_transform,
                         wandb_project=log_cfg.get("wandb_project", "eedx"))

@@ -34,6 +34,46 @@ def outward_normals(xs: jax.Array, p: float, eps: float = 1e-6) -> jax.Array:
 	return g / (jnp.linalg.norm(g, axis=-1, keepdims=True) + eps)
 
 
+def make_ciliated_torque_morphogen_field(motor_interface, base_field=None):
+	"""Build a RAND `fixed_morphogen_field` that tells cells the body's local surface geometry.
+
+	Returns a callable ``field(x) -> [k + 2]`` suitable for `RAND_CTRNN(fixed_morphogen_field=...)`.
+	It extends `base_field` (RAND's default positional morphogen `M` when None) with **two extra
+	components: the outward unit normal of the ciliated_torque body at the cell's position** — but
+	only for cells on the border (``max(|x|, |y|) > 1 - border_size``, the same test the interface
+	uses to pick cilia). Off the border the two components are zero.
+
+	The point is to give development the information that makes ciliated_torque locomotion work:
+	a border cell can read which way it faces (hence whether beating there pushes forward, sideways,
+	or turns the body) rather than having to infer it from raw position. `border_size` and `shape_p`
+	are read from the interface so the morphogen's "on border" and normal direction match the
+	locomotion exactly.
+
+	Works on a single position ``x`` [2] (as RAND calls it, per cell) and on a batch [N, 2].
+	"""
+	if not hasattr(motor_interface, "shape_p"):
+		raise TypeError("make_ciliated_torque_morphogen_field expects a CiliatedTorqueMotorInterface "
+		                "(needs shape_p / border_size)")
+	if base_field is None:
+		from ..nn.rand import M            # local import avoids a motor<->nn import cycle
+		base_field = M
+	border_size = float(motor_interface.border_size)
+	shape_p = float(motor_interface.shape_p)
+
+	def field(x: jax.Array) -> jax.Array:
+		on_border = jnp.maximum(jnp.abs(x[..., 0]), jnp.abs(x[..., 1])) > (1.0 - border_size)
+		# `outward_normals` has a non-finite gradient at the origin (it divides by |x|), and
+		# `jnp.where` leaks a NaN gradient from the *unselected* branch. RAND's migration
+		# differentiates this field and interior cells sit at the origin, so evaluate the normal at
+		# a safe off-origin point for non-border cells — their value is 0 either way, but this keeps
+		# the gradient finite. Border cells (max(|x|) > 1-border_size) are never at the origin.
+		safe = jnp.where(on_border[..., None], x, jnp.ones_like(x))
+		normal = jnp.where(on_border[..., None], outward_normals(safe, shape_p), 0.0)
+		return jnp.concatenate([base_field(x), normal], axis=-1)
+
+	return field
+
+
 class CiliatedTorqueMotorState(struct.PyTreeNode):
 	"""Per-neuron cilia layout, precomputed once for a grown body.
 
@@ -99,6 +139,17 @@ class CiliatedTorqueMotorInterface(MotorInterface):
 	max_velocity: float = 10.0
 	max_angular_speed: float = jnp.pi / 4
 	motor_energy_cost: float = 0.1
+	# --- allometry (size/speed/energy trade-off). Neuron positions are normalised to [-1,1], so
+	# the interface is size-independent by default (both exponents 0). Set them to couple body
+	# size to locomotion:
+	#   absolute velocity  *= body_size ** size_speed_exponent   (>0 -> bigger body absolutely
+	#       faster in world units, but slower in body-lengths, as in real animals)
+	#   motor energy cost  *= body_size ** size_cost_exponent    (>0 -> moving a bigger body costs
+	#       more; the work-against-drag term)
+	# A size-1 body is unaffected whatever the exponents; tune the base max_velocity / thrust_gain
+	# / motor_energy_cost around the typical size when you turn these on.
+	size_speed_exponent: float = 0.0
+	size_cost_exponent: float = 0.0
 	# ------------------------------------------------------------------
 
 	def _cilia_layout(self, neural_state: NeuralState) -> CiliatedTorqueMotorState:
@@ -138,8 +189,8 @@ class CiliatedTorqueMotorInterface(MotorInterface):
 
 	# ------------------------------------------------------------------
 
-	def decode(self, neural_state: NeuralState, motor_state: CiliatedTorqueMotorState
-	           ) -> tuple[Action, Float, CiliatedTorqueMotorState, Info]:
+	def actuate(self, neural_state: NeuralState, motor_state: CiliatedTorqueMotorState,
+	            body: Body, key: jax.Array) -> tuple[Body, Float, CiliatedTorqueMotorState, Info]:
 
 		# Thrust per neuron: beat rate (non-negative — a cilium can stop, not suck) times cilium
 		# size. `max_beat` caps the *rate*, so size scales the thrust that beating produces;
@@ -156,11 +207,18 @@ class CiliatedTorqueMotorInterface(MotorInterface):
 		velocity = force * jnp.where(speed > self.max_velocity, self.max_velocity / (speed + 1e-9), 1.0)
 		omega = jnp.clip(torque, -self.max_angular_speed, self.max_angular_speed)
 
+		# allometry: bigger body -> absolutely faster (velocity scales with size). Angular speed
+		# is left size-independent. size**0 == 1, so the default (exponent 0) is unchanged.
+		L = body.size.astype(POSITION_DTYPE)
+		velocity = velocity * L ** self.size_speed_exponent
+
 		# actions feed straight into positions, so build them at the position dtype
 		action = jnp.array([velocity[0], velocity[1], omega], dtype=POSITION_DTYPE)
+		new_body = self.move(action, body)
 
-		energy_loss = jnp.astype(jnp.sum(beat) * self.motor_energy_cost, jnp.float16)
-		return action, energy_loss, motor_state, {"action_norm": jnp.abs(action).sum()}
+		# allometry: moving a bigger body costs more (work against drag)
+		energy_loss = jnp.astype(jnp.sum(beat) * self.motor_energy_cost * L ** self.size_cost_exponent, jnp.float16)
+		return new_body, energy_loss, motor_state, {"action_norm": jnp.abs(action).sum(), "action": action}
 
 	# ------------------------------------------------------------------
 
